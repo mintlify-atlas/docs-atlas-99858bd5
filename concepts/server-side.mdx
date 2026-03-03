@@ -1,0 +1,341 @@
+---
+title: Server-side networking
+description: Building game servers with PodSixNet
+---
+
+PodSixNet's server architecture uses two classes that you subclass: `Server` to manage connections, and `Channel` to represent each connected client.
+
+## Two-class pattern
+
+Every PodSixNet server needs:
+
+1. **A Channel subclass** - Represents one connected client
+2. **A Server subclass** - Manages all client connections
+
+<Steps>
+  <Step title="Create a Channel subclass">
+    Define how to handle messages from one client
+  </Step>
+  <Step title="Create a Server subclass">
+    Define how to manage multiple clients
+  </Step>
+  <Step title="Link them together">
+    Set `channelClass` to your Channel subclass
+  </Step>
+</Steps>
+
+## Channel: Representing a client
+
+Each connected client is represented by a `Channel` instance:
+
+```python
+from PodSixNet.Channel import Channel
+
+class ClientChannel(Channel):
+    def Network(self, data):
+        """Called for all messages from this client"""
+        print(f"Received from {self.addr}: {data}")
+    
+    def Network_move(self, data):
+        """Called when client sends {"action": "move", ...}"""
+        x, y = data['x'], data['y']
+        print(f"Client {self.addr} moved to ({x}, {y})")
+        
+        # Broadcast to all clients
+        self._server.SendToAll({
+            "action": "position",
+            "client": self.addr,
+            "x": x,
+            "y": y
+        })
+```
+
+### Channel attributes
+
+Every Channel has these attributes:
+
+```python
+class ClientChannel(Channel):
+    def Network_hello(self, data):
+        print(self.addr)      # Client address tuple (host, port)
+        print(self._server)   # Reference to parent Server instance
+```
+
+### Channel initialization
+
+You can add custom initialization:
+
+```python
+class ClientChannel(Channel):
+    def __init__(self, *args, **kwargs):
+        self.nickname = "anonymous"
+        self.score = 0
+        Channel.__init__(self, *args, **kwargs)
+    
+    def Network_setname(self, data):
+        self.nickname = data['name']
+        print(f"{self.addr} is now known as {self.nickname}")
+```
+
+<Warning>Always call `Channel.__init__()` in your `__init__` method!</Warning>
+
+### Channel cleanup
+
+Handle client disconnections with the `Close()` callback:
+
+```python
+class ClientChannel(Channel):
+    def Close(self):
+        """Called when client disconnects"""
+        print(f"Client {self.addr} disconnected")
+        self._server.RemovePlayer(self)
+```
+
+## Server: Managing clients
+
+The `Server` class manages multiple client connections:
+
+```python
+from PodSixNet.Server import Server
+from weakref import WeakKeyDictionary
+
+class GameServer(Server):
+    channelClass = ClientChannel
+    
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        self.players = WeakKeyDictionary()
+    
+    def Connected(self, channel, addr):
+        """Called when a new client connects"""
+        print(f"New connection from {addr}")
+        self.players[channel] = True
+```
+
+### channelClass attribute
+
+The `channelClass` attribute tells the server which Channel class to instantiate:
+
+```python
+class GameServer(Server):
+    channelClass = ClientChannel  # Your custom Channel subclass
+```
+
+When a client connects, the server automatically creates a `ClientChannel` instance.
+
+### Connected() callback
+
+Implement `Connected()` to handle new connections:
+
+```python
+def Connected(self, channel, addr):
+    """
+    channel: The ClientChannel instance for this connection
+    addr: Tuple of (host, port)
+    """
+    print(f"Player connected from {addr}")
+    
+    # Send welcome message
+    channel.Send({"action": "welcome", "message": "Hello!"})
+    
+    # Track the player
+    self.players[channel] = True
+    
+    # Notify others
+    self.BroadcastPlayers()
+```
+
+### Server initialization
+
+Customize server startup:
+
+```python
+class GameServer(Server):
+    channelClass = ClientChannel
+    
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        self.game_state = {}
+        self.players = WeakKeyDictionary()
+        print("Game server initialized")
+```
+
+### Server address and port
+
+Specify the bind address when creating the server:
+
+```python
+# Listen on localhost:5071
+server = GameServer(localaddr=("127.0.0.1", 5071))
+
+# Listen on all interfaces
+server = GameServer(localaddr=("0.0.0.0", 5071))
+
+# Specify custom channel class
+server = GameServer(
+    channelClass=MyCustomChannel,
+    localaddr=("0.0.0.0", 8000),
+    listeners=10  # Max queued connections
+)
+```
+
+## Sending data to clients
+
+### Send to one client
+
+Use `channel.Send()` to send to a specific client:
+
+```python
+class ClientChannel(Channel):
+    def Network_request_data(self, data):
+        # Send response to this client only
+        self.Send({
+            "action": "data",
+            "value": 42
+        })
+```
+
+### Send to all clients
+
+Iterate over your player list:
+
+```python
+class GameServer(Server):
+    def SendToAll(self, data):
+        """Broadcast message to all connected clients"""
+        for player in self.players:
+            player.Send(data)
+    
+    def BroadcastScore(self, player, score):
+        self.SendToAll({
+            "action": "score",
+            "player": player.nickname,
+            "score": score
+        })
+```
+
+### Send to all except one
+
+```python
+def SendToAllExcept(self, data, exclude_channel):
+    """Send to everyone except one client"""
+    for player in self.players:
+        if player != exclude_channel:
+            player.Send(data)
+```
+
+## The Pump() loop
+
+Call `server.Pump()` regularly to process network events:
+
+```python
+from time import sleep
+
+server = GameServer(localaddr=("localhost", 5071))
+print("Server started on localhost:5071")
+
+while True:
+    server.Pump()
+    sleep(0.0001)
+```
+
+<Info>The server's Pump() method calls Pump() on all connected channels.</Info>
+
+## Tracking players
+
+Use `WeakKeyDictionary` to automatically clean up disconnected clients:
+
+```python
+from weakref import WeakKeyDictionary
+
+class GameServer(Server):
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        self.players = WeakKeyDictionary()
+    
+    def Connected(self, channel, addr):
+        self.players[channel] = True
+        print(f"Players online: {len(self.players)}")
+```
+
+<Tip>WeakKeyDictionary automatically removes entries when channels are garbage collected.</Tip>
+
+## Complete example
+
+Here's a complete server implementation from the chat example:
+
+```python
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+from weakref import WeakKeyDictionary
+from time import sleep
+
+class ClientChannel(Channel):
+    def __init__(self, *args, **kwargs):
+        self.nickname = "anonymous"
+        Channel.__init__(self, *args, **kwargs)
+    
+    def Close(self):
+        self._server.DelPlayer(self)
+    
+    def Network_message(self, data):
+        self._server.SendToAll({
+            "action": "message",
+            "message": data['message'],
+            "who": self.nickname
+        })
+    
+    def Network_nickname(self, data):
+        self.nickname = data['nickname']
+        self._server.SendPlayers()
+
+class ChatServer(Server):
+    channelClass = ClientChannel
+    
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        self.players = WeakKeyDictionary()
+        print('Server launched')
+    
+    def Connected(self, channel, addr):
+        print(f"New player: {addr}")
+        self.players[channel] = True
+        self.SendPlayers()
+    
+    def DelPlayer(self, player):
+        print(f"Removing player: {player.addr}")
+        del self.players[player]
+        self.SendPlayers()
+    
+    def SendPlayers(self):
+        self.SendToAll({
+            "action": "players",
+            "players": [p.nickname for p in self.players]
+        })
+    
+    def SendToAll(self, data):
+        [p.Send(data) for p in self.players]
+
+# Start server
+server = ChatServer(localaddr=("localhost", 5071))
+while True:
+    server.Pump()
+    sleep(0.0001)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Server API" icon="server" href="/api/server">
+    Full Server API reference
+  </Card>
+  <Card title="Channel API" icon="tower-broadcast" href="/api/channel">
+    Full Channel API reference
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    See complete server examples
+  </Card>
+  <Card title="Client-side" icon="desktop" href="/concepts/client-side">
+    Learn about client implementation
+  </Card>
+</CardGroup>

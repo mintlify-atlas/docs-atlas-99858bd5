@@ -1,0 +1,181 @@
+---
+title: Architecture
+description: Understanding PodSixNet's event-driven network architecture
+---
+
+PodSixNet uses Python's built-in `asyncore` library to provide asynchronous, event-driven networking specifically designed for multiplayer games.
+
+## Core architecture
+
+PodSixNet's architecture is built around four main components:
+
+<CardGroup cols={2}>
+  <Card title="Channel" icon="tower-broadcast">
+    Base class for network connections, handles sending/receiving data
+  </Card>
+  <Card title="Server" icon="server">
+    Manages multiple client connections and creates Channel instances
+  </Card>
+  <Card title="EndPoint" icon="plug">
+    Client-side connection manager that queues network events
+  </Card>
+  <Card title="ConnectionListener" icon="ear-listen">
+    Base class for objects that need to receive network events
+  </Card>
+</CardGroup>
+
+## Event-driven design
+
+PodSixNet uses an event-driven callback pattern. Instead of polling sockets or managing buffers manually, you simply:
+
+1. Call `Pump()` once per game loop
+2. Implement `Network_*` callback methods
+3. Send data using `Send()`
+
+<Info>The Pump() method processes all pending network events and dispatches them to your callback methods.</Info>
+
+## The Pump() loop pattern
+
+Both clients and servers must call `Pump()` regularly to process network events:
+
+```python
+# Server-side
+myserver = MyServer()
+while True:
+    myserver.Pump()
+    sleep(0.0001)
+```
+
+```python
+# Client-side
+from PodSixNet.Connection import connection
+
+listener = MyNetworkListener()
+while True:
+    connection.Pump()  # Process network I/O
+    listener.Pump()    # Dispatch events to listener
+    sleep(0.001)
+```
+
+<Warning>Forgetting to call Pump() will prevent network events from being processed!</Warning>
+
+## Network_* callback pattern
+
+PodSixNet automatically routes messages to callback methods based on the `action` key:
+
+```python
+class MyListener(ConnectionListener):
+    def Network(self, data):
+        # Called for ALL incoming messages
+        print('Received:', data)
+    
+    def Network_myaction(self, data):
+        # Called only when data['action'] == 'myaction'
+        print('My action:', data)
+```
+
+When a message arrives:
+
+```python
+{"action": "myaction", "value": 42}
+```
+
+Both `Network()` and `Network_myaction()` will be called with this data.
+
+## Data flow
+
+<Steps>
+  <Step title="Client sends data">
+    ```python
+    connection.Send({"action": "move", "x": 10, "y": 20})
+    ```
+  </Step>
+  
+  <Step title="Data is serialized">
+    The message is encoded using rencode and queued for sending
+  </Step>
+  
+  <Step title="Server receives during Pump()">
+    ```python
+    class ClientChannel(Channel):
+        def Network_move(self, data):
+            print(f"Player moved to {data['x']}, {data['y']}")
+    ```
+  </Step>
+  
+  <Step title="Server responds">
+    ```python
+    channel.Send({"action": "moved", "success": True})
+    ```
+  </Step>
+  
+  <Step title="Client receives during Pump()">
+    ```python
+    class GameClient(ConnectionListener):
+        def Network_moved(self, data):
+            print("Move confirmed!")
+    ```
+  </Step>
+</Steps>
+
+## Asyncore foundation
+
+PodSixNet is built on Python's `asyncore` library:
+
+- **Non-blocking I/O**: Network operations don't freeze your game
+- **Single-threaded**: No complex threading or locking needed
+- **Event loop integration**: Works with game loops
+
+<Note>While asyncore is deprecated in Python 3.12+, PodSixNet continues to work with it for backward compatibility.</Note>
+
+## Component relationships
+
+```
+Server
+  ├── Creates Channel instances (one per client)
+  ├── Calls Channel.Pump() for each connection
+  └── Provides Connected(channel, addr) callback
+
+Channel
+  ├── Inherits from asynchat.async_chat
+  ├── Handles data serialization/deserialization
+  ├── Routes messages to Network_* methods
+  └── Manages send queue
+
+EndPoint (Client)
+  ├── Inherits from Channel
+  ├── Maintains event queue
+  └── Used by connection singleton
+
+ConnectionListener
+  ├── Receives events from connection queue
+  ├── Implements Network_* callbacks
+  └── Multiple listeners can coexist
+```
+
+## Message termination
+
+PodSixNet uses a special terminator sequence to separate messages:
+
+```python
+endchars = '\0---\0'
+```
+
+This ensures complete messages are received before processing, even if data arrives in fragments.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Client-side" icon="desktop" href="/concepts/client-side">
+    Learn about client implementation
+  </Card>
+  <Card title="Server-side" icon="server" href="/concepts/server-side">
+    Learn about server implementation
+  </Card>
+  <Card title="Data serialization" icon="code" href="/concepts/data-serialization">
+    Understand message formats
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/channel">
+    Explore the full API
+  </Card>
+</CardGroup>

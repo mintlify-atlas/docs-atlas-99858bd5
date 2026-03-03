@@ -1,0 +1,446 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for PodSixNet
+---
+
+## Connection errors
+
+### Connection refused (Error 111)
+
+This is the most common error when starting out:
+
+```python
+def Network_error(self, data):
+    print(f"error: {data['error']}")  # (111, 'Connection refused')
+```
+
+**Causes:**
+- Server isn't running
+- Wrong host/port specified
+- Firewall blocking connection
+
+**Solutions:**
+
+<Steps>
+  <Step title="Verify server is running">
+    ```bash
+    python myserver.py
+    # Should show "Server launched" or similar
+    ```
+  </Step>
+  
+  <Step title="Check host and port match">
+    ```python
+    # Server
+    server = MyServer(localaddr=("localhost", 5071))
+    
+    # Client - must match exactly
+    connection.Connect(("localhost", 5071))
+    ```
+  </Step>
+  
+  <Step title="Try 127.0.0.1 instead of localhost">
+    ```python
+    connection.Connect(("127.0.0.1", 5071))
+    ```
+  </Step>
+</Steps>
+
+### Address already in use (Error 48/98)
+
+```
+OSError: [Errno 48] Address already in use
+```
+
+**Cause:** Port is already bound by another process
+
+**Solutions:**
+
+<Accordion title="Kill the existing process">
+  ```bash
+  # Find process using port 5071
+  lsof -i :5071
+  # or
+  netstat -tulpn | grep 5071
+  
+  # Kill it
+  kill -9 <PID>
+  ```
+</Accordion>
+
+<Accordion title="Use a different port">
+  ```python
+  # Change to unused port
+  server = MyServer(localaddr=("localhost", 5072))
+  ```
+</Accordion>
+
+<Accordion title="Enable socket reuse (already done by PodSixNet)">
+  ```python
+  # PodSixNet already calls this in Server.__init__:
+  self.set_reuse_addr()
+  ```
+</Accordion>
+
+### Connection timeout
+
+**Causes:**
+- Server unreachable over network
+- Firewall blocking connection
+- Wrong IP address
+
+**Solutions:**
+
+```bash
+# Test connectivity
+ping server-address
+
+# Test port is open
+telnet server-address 5071
+# or
+nc -zv server-address 5071
+```
+
+<Warning>If connecting over the internet, ensure your firewall allows the port and you're using the public IP, not localhost.</Warning>
+
+## Pump() issues
+
+### Messages not being received
+
+If your `Network_*` methods aren't being called:
+
+<Accordion title="Forgot to call connection.Pump()">
+  ```python
+  # ❌ Wrong - no Pump()
+  client = MyClient()
+  client.Connect()
+  while True:
+      # Network events never processed!
+      update_game()
+  
+  # ✅ Correct
+  while True:
+      connection.Pump()  # Process network I/O
+      client.Pump()      # Dispatch to listeners
+      update_game()
+  ```
+</Accordion>
+
+<Accordion title="Forgot to call listener.Pump()">
+  ```python
+  # You need BOTH
+  connection.Pump()  # Handles sockets and queues events
+  client.Pump()      # Calls your Network_* methods
+  ```
+</Accordion>
+
+<Accordion title="Forgot to call server.Pump()">
+  ```python
+  # Server side
+  server = MyServer()
+  while True:
+      server.Pump()  # Must call this!
+      sleep(0.0001)
+  ```
+</Accordion>
+
+### Pump() called too slowly
+
+If you call `Pump()` infrequently, messages will be delayed:
+
+```python
+# ❌ Bad - only pumps once per second
+while True:
+    connection.Pump()
+    sleep(1.0)  # Too long!
+
+# ✅ Good - pumps frequently
+while True:
+    connection.Pump()
+    sleep(0.001)  # ~1000 times per second
+```
+
+<Tip>Call Pump() once per frame in your game loop, typically 60+ times per second.</Tip>
+
+## Message routing issues
+
+### Network_* method not called
+
+If your callback isn't being invoked:
+
+<Accordion title="Missing 'action' key">
+  ```python
+  # ❌ Wrong - no routing
+  connection.Send({"x": 10, "y": 20})
+  # Prints: "OOB data: {'x': 10, 'y': 20}"
+  
+  # ✅ Correct
+  connection.Send({"action": "move", "x": 10, "y": 20})
+  # Calls: Network_move(data)
+  ```
+</Accordion>
+
+<Accordion title="Method name doesn't match action">
+  ```python
+  # Sending
+  connection.Send({"action": "player_moved", ...})
+  
+  # ❌ Wrong - name mismatch
+  def Network_move(self, data):
+      pass  # Never called!
+  
+  # ✅ Correct - exact match
+  def Network_player_moved(self, data):
+      pass  # Called!
+  ```
+</Accordion>
+
+<Accordion title="Typo in method name">
+  ```python
+  # Must be exactly "Network_" prefix
+  def Network_move(self, data):     # ✅ Correct
+  def network_move(self, data):     # ❌ Wrong (lowercase)
+  def Network_Move(self, data):     # ❌ Wrong (capital M)
+  def Networks_move(self, data):    # ❌ Wrong (extra s)
+  ```
+</Accordion>
+
+## Deprecation warnings
+
+### asyncore is deprecated
+
+You may see this warning:
+
+```
+DeprecationWarning: The asyncore module is deprecated and will be removed in Python 3.12
+```
+
+**Explanation:**
+
+PodSixNet uses Python's `asyncore` library, which is deprecated as of Python 3.12. The library still works but may be removed in future Python versions.
+
+**Options:**
+
+1. **Continue using it** - It still works in Python 3.11 and earlier
+2. **Suppress the warning**:
+   ```python
+   import warnings
+   warnings.filterwarnings("ignore", category=DeprecationWarning)
+   ```
+3. **Consider alternatives** - For new projects, consider modern alternatives like asyncio-based libraries
+
+<Note>PodSixNet is no longer actively maintained. See [GitHub issue #46](https://github.com/chr15m/PodSixNet/issues/46).</Note>
+
+## Threading issues
+
+### Using threads with PodSixNet
+
+PodSixNet is **single-threaded** by design. Calling methods from multiple threads can cause issues:
+
+```python
+# ❌ Dangerous - calling from thread
+from threading import Thread
+
+def background_task():
+    connection.Send({"action": "update"})  # Not thread-safe!
+
+Thread(target=background_task).start()
+```
+
+**Solution:** Use a queue to communicate between threads:
+
+```python
+from queue import Queue
+from threading import Thread
+
+message_queue = Queue()
+
+def background_task():
+    # Put message in queue instead of sending directly
+    message_queue.put({"action": "update", "data": 42})
+
+Thread(target=background_task).start()
+
+# In main loop
+while True:
+    # Send queued messages from main thread
+    while not message_queue.empty():
+        msg = message_queue.get()
+        connection.Send(msg)
+    
+    connection.Pump()
+    sleep(0.001)
+```
+
+<Warning>Always call Send() and Pump() from the same thread (typically your main thread).</Warning>
+
+## Serialization issues
+
+### Can't serialize object
+
+rencode can't serialize custom classes:
+
+```python
+class Player:
+    def __init__(self, name):
+        self.name = name
+
+player = Player("Alice")
+
+# ❌ Error - can't serialize custom object
+connection.Send({"action": "player", "player": player})
+```
+
+**Solution:** Convert to built-in types:
+
+```python
+# ✅ Correct - use dict
+connection.Send({
+    "action": "player",
+    "player": {"name": player.name}
+})
+```
+
+### JSON vs rencode incompatibility
+
+If client and server use different serializers, they can't communicate:
+
+```python
+# Server uses rencode (default)
+class MyChannel(Channel):
+    pass  # Uses rencode
+
+# Client uses JSON (modified Channel.py)
+# from json import loads, dumps
+
+# ❌ These can't talk to each other!
+```
+
+**Solution:** Both must use the same serializer.
+
+## Performance issues
+
+### High CPU usage
+
+```python
+# ❌ Busy-waiting - uses 100% CPU
+while True:
+    connection.Pump()  # No sleep!
+```
+
+**Solution:** Add a small sleep:
+
+```python
+# ✅ Sleep to avoid busy-waiting
+from time import sleep
+while True:
+    connection.Pump()
+    sleep(0.001)  # Yields CPU
+```
+
+### Message lag/delay
+
+If messages arrive late:
+
+1. **Check Pump() frequency** - Call it more often
+2. **Reduce sleep time** - Sleep less between Pump() calls
+3. **Network latency** - Use the lag-time example to measure:
+   ```bash
+   python examples/LagTimeServer.py
+   python examples/LagTimeClient.py
+   ```
+
+## Firewall issues
+
+### Server not accessible from other machines
+
+<Steps>
+  <Step title="Bind to 0.0.0.0, not localhost">
+    ```python
+    # ❌ Only accessible from same machine
+    server = MyServer(localaddr=("localhost", 5071))
+    
+    # ✅ Accessible from network
+    server = MyServer(localaddr=("0.0.0.0", 5071))
+    ```
+  </Step>
+  
+  <Step title="Allow port in firewall">
+    ```bash
+    # Linux (ufw)
+    sudo ufw allow 5071/tcp
+    
+    # Linux (iptables)
+    sudo iptables -A INPUT -p tcp --dport 5071 -j ACCEPT
+    
+    # macOS
+    # Use System Preferences → Security & Privacy → Firewall
+    ```
+  </Step>
+  
+  <Step title="Find your IP address">
+    ```bash
+    # Linux/macOS
+    ifconfig | grep inet
+    # or
+    ip addr show
+    
+    # Windows
+    ipconfig
+    ```
+    
+    Clients should connect to this IP, not localhost.
+  </Step>
+</Steps>
+
+## Debugging tips
+
+### Enable debug output
+
+```python
+class DebugChannel(Channel):
+    def Network(self, data):
+        print(f"[DEBUG] Received: {data}")
+        super().Network(data)
+    
+    def Send(self, data):
+        print(f"[DEBUG] Sending: {data}")
+        return super().Send(data)
+```
+
+### Check connection status
+
+```python
+from PodSixNet.Connection import connection
+
+if connection.isConnected:
+    print("Connected to server")
+else:
+    print("Not connected")
+```
+
+### Verify server is listening
+
+```bash
+# Check if port is open
+netstat -an | grep 5071
+# or
+lsof -i :5071
+```
+
+## Getting help
+
+<CardGroup cols={2}>
+  <Card title="FAQ" icon="question" href="/resources/faq">
+    Common questions and answers
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/chr15m/PodSixNet/issues">
+    Report bugs or ask questions
+  </Card>
+  <Card title="Mailing List" icon="envelope" href="http://groups.google.com/group/podsixnet">
+    Community discussion forum
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    Working example code
+  </Card>
+</CardGroup>

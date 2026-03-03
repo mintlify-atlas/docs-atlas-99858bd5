@@ -1,0 +1,297 @@
+---
+title: Data serialization
+description: Understanding message formats and serialization in PodSixNet
+---
+
+PodSixNet uses automatic serialization to convert Python data structures into bytes for network transmission.
+
+## Default: rencode binary format
+
+By default, PodSixNet uses the **rencode** library for serialization:
+
+```python
+from PodSixNet.rencode import loads, dumps
+
+# Encoding
+data = {"action": "move", "x": 10, "y": 20}
+bytes_data = dumps(data)
+
+# Decoding  
+received_data = loads(bytes_data)
+```
+
+<Info>rencode is a fast binary format similar to msgpack, included with PodSixNet.</Info>
+
+### Advantages of rencode
+
+- **Fast**: Binary encoding is faster than JSON
+- **Compact**: Smaller message sizes
+- **No dependencies**: Included with PodSixNet
+- **Type preservation**: Maintains Python types (tuples, etc.)
+
+### Disadvantages of rencode
+
+- **Python-specific**: Other languages can't easily decode it
+- **Not human-readable**: Can't inspect messages as text
+
+## Message structure
+
+All messages must be dictionaries with an `action` key:
+
+```python
+# Valid messages
+{"action": "move", "x": 10, "y": 20}
+{"action": "chat", "message": "hello", "from": "player1"}
+{"action": "update", "data": [1, 2, 3]}
+
+# Invalid - no action key
+{"x": 10, "y": 20}  # Won't route to Network_* methods
+```
+
+<Warning>Messages without an `action` key will print "OOB data" and won't call Network_* callbacks.</Warning>
+
+## Action-based routing
+
+The `action` key determines which callback method is called:
+
+```python
+class GameClient(ConnectionListener):
+    def Network_move(self, data):
+        # Called when action == "move"
+        print(f"Move to {data['x']}, {data['y']}")
+    
+    def Network_chat(self, data):
+        # Called when action == "chat"
+        print(f"Chat: {data['message']}")
+```
+
+### How routing works
+
+When this message arrives:
+
+```python
+{"action": "move", "x": 10, "y": 20}
+```
+
+PodSixNet automatically calls:
+
+1. `Network_move(data)` - if it exists
+2. `Network(data)` - always called (if it exists)
+
+Both methods receive the complete message dictionary.
+
+## Message termination
+
+Messages are separated using a special terminator sequence:
+
+```python
+class Channel:
+    endchars = '\0---\0'
+```
+
+This ensures messages are fully received before processing:
+
+<Steps>
+  <Step title="Data is serialized">
+    `dumps(data)` → binary data
+  </Step>
+  <Step title="Terminator is added">
+    binary data + `'\0---\0'` → complete message
+  </Step>
+  <Step title="Message is sent">
+    Complete message is queued and sent
+  </Step>
+  <Step title="Receiver waits for terminator">
+    Buffers data until `'\0---\0'` is found
+  </Step>
+  <Step title="Message is deserialized">
+    `loads(buffered_data)` → Python dictionary
+  </Step>
+</Steps>
+
+<Info>You don't need to handle terminators manually - PodSixNet does this automatically.</Info>
+
+## Optional: JSON serialization
+
+You can use JSON instead of rencode for cross-language compatibility:
+
+### Method 1: Modify Channel.py
+
+Edit the first line of `PodSixNet/Channel.py`:
+
+```python
+# Before
+from PodSixNet.rencode import loads, dumps
+
+# After (Python 2.6+)
+from json import loads, dumps
+
+# Or (older Python with simplejson)
+from simplejson import loads, dumps
+```
+
+### Method 2: Custom Channel class
+
+Create a custom Channel with JSON serialization:
+
+```python
+import json
+from PodSixNet.Channel import Channel as BaseChannel
+from PodSixNet.asyncwrapper import asynchat
+
+class JSONChannel(BaseChannel):
+    def collect_incoming_data(self, data):
+        self._ibuffer += data
+    
+    def found_terminator(self):
+        # Deserialize using JSON
+        data = json.loads(self._ibuffer.decode('utf-8'))
+        self._ibuffer = b""
+        
+        if isinstance(data, dict) and 'action' in data:
+            [getattr(self, n)(data) for n in 
+             ('Network_' + data['action'], 'Network') 
+             if hasattr(self, n)]
+    
+    def Send(self, data):
+        # Serialize using JSON
+        outgoing = json.dumps(data).encode('utf-8') + self.endchars.encode()
+        self.sendqueue.append(outgoing)
+        return len(outgoing)
+```
+
+### When to use JSON
+
+✅ **Use JSON when:**
+- Building web-based clients (JavaScript)
+- Interfacing with non-Python systems
+- Debugging (human-readable messages)
+
+❌ **Avoid JSON when:**
+- Performance is critical (binary is faster)
+- Message size matters (binary is smaller)
+- Python-only ecosystem (rencode is better)
+
+## Supported data types
+
+### With rencode (default)
+
+```python
+# All these work
+connection.Send({
+    "action": "data",
+    "string": "hello",
+    "number": 42,
+    "float": 3.14,
+    "bool": True,
+    "none": None,
+    "list": [1, 2, 3],
+    "tuple": (1, 2, 3),  # Preserved as tuple
+    "dict": {"nested": "value"},
+    "bytes": b"binary data"
+})
+```
+
+### With JSON
+
+```python
+# Tuples become lists, bytes not supported
+connection.Send({
+    "action": "data",
+    "string": "hello",
+    "number": 42,
+    "float": 3.14,
+    "bool": True,
+    "none": None,
+    "list": [1, 2, 3],
+    "dict": {"nested": "value"}
+})
+```
+
+<Warning>JSON doesn't support bytes or distinguish between tuples and lists.</Warning>
+
+## Message size considerations
+
+PodSixNet buffers messages in memory:
+
+```python
+class Channel:
+    def __init__(self, ...):
+        self._ibuffer = b""  # Input buffer
+        self.sendqueue = []   # Output queue
+```
+
+**Best practices:**
+
+- Keep messages small (< 1KB recommended)
+- Split large data across multiple messages
+- Avoid sending entire game states
+- Send deltas/changes instead of full state
+
+<Tip>For large file transfers, consider a different protocol or chunk the data.</Tip>
+
+## Example: Efficient state updates
+
+❌ **Bad: Sending entire game state**
+
+```python
+# Wasteful - sends everything every frame
+self.Send({
+    "action": "gamestate",
+    "all_players": [...],  # 100+ players
+    "all_items": [...],    # 1000+ items
+    "map_data": [...]      # Large map
+})
+```
+
+✅ **Good: Sending only changes**
+
+```python
+# Efficient - only send what changed
+self.Send({
+    "action": "position",
+    "player_id": 5,
+    "x": 100,
+    "y": 200
+})
+
+self.Send({
+    "action": "item_pickup",
+    "player_id": 5,
+    "item_id": 42
+})
+```
+
+## Debugging messages
+
+To see what's being sent/received:
+
+```python
+class DebugChannel(Channel):
+    def Send(self, data):
+        print(f"→ Sending: {data}")
+        return super().Send(data)
+    
+    def found_terminator(self):
+        from PodSixNet.rencode import loads
+        data = loads(self._ibuffer)
+        print(f"← Received: {data}")
+        super().found_terminator()
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand the full architecture
+  </Card>
+  <Card title="Channel API" icon="tower-broadcast" href="/api/channel">
+    Learn about Channel internals
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    See serialization in action
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/resources/troubleshooting">
+    Debug serialization issues
+  </Card>
+</CardGroup>

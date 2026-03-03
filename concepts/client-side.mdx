@@ -1,0 +1,283 @@
+---
+title: Client-side networking
+description: Building game clients with PodSixNet
+---
+
+PodSixNet's client-side architecture uses a singleton connection and listener pattern to make it easy to receive network events in your game objects.
+
+## The connection singleton
+
+PodSixNet provides a singleton `connection` object that manages your client's connection to the server:
+
+```python
+from PodSixNet.Connection import connection
+
+# Connect to server (default: localhost:31425)
+connection.Connect()
+
+# Or specify address
+connection.Connect(("game.example.com", 5071))
+```
+
+<Info>Using a singleton means you only have one connection per client, which is typical for most multiplayer games.</Info>
+
+## ConnectionListener class
+
+To receive network events, subclass `ConnectionListener`:
+
+```python
+from PodSixNet.Connection import ConnectionListener
+
+class GameClient(ConnectionListener):
+    def Network_connected(self, data):
+        print("Connected to server!")
+    
+    def Network_error(self, data):
+        print(f"Connection error: {data['error'][1]}")
+    
+    def Network_disconnected(self, data):
+        print("Disconnected from server")
+```
+
+## Built-in Network callbacks
+
+PodSixNet provides several built-in network events:
+
+### Network_connected
+
+Called when successfully connected to the server:
+
+```python
+def Network_connected(self, data):
+    print("Connection established")
+    # Send initial data to server
+    self.Send({"action": "login", "username": "player1"})
+```
+
+### Network_error
+
+Called when a connection error occurs:
+
+```python
+def Network_error(self, data):
+    # data['error'] is a tuple: (error_code, error_message)
+    code, message = data['error']
+    if code == 111:
+        print("Connection refused - is the server running?")
+    else:
+        print(f"Network error {code}: {message}")
+```
+
+<Note>Error data comes from standard Python socket errors.</Note>
+
+### Network_disconnected
+
+Called when disconnected from the server:
+
+```python
+def Network_disconnected(self, data):
+    print("Lost connection to server")
+    # Clean up game state
+    self.cleanup()
+```
+
+## Custom Network callbacks
+
+Implement custom `Network_*` methods to handle game-specific messages:
+
+```python
+class GameClient(ConnectionListener):
+    def Network_players(self, data):
+        """Handle player list updates"""
+        print(f"Online players: {data['players']}")
+    
+    def Network_position(self, data):
+        """Handle position updates"""
+        player_id = data['id']
+        x, y = data['x'], data['y']
+        self.update_player_position(player_id, x, y)
+    
+    def Network_message(self, data):
+        """Handle chat messages"""
+        print(f"{data['who']}: {data['text']}")
+```
+
+These methods are called automatically when messages arrive with matching `action` values.
+
+## Sending data to server
+
+Use the `Send()` method to send data:
+
+```python
+class GameClient(ConnectionListener):
+    def move_player(self, x, y):
+        # Send movement data to server
+        self.Send({
+            "action": "move",
+            "x": x,
+            "y": y
+        })
+    
+    def send_chat(self, message):
+        self.Send({
+            "action": "chat",
+            "text": message
+        })
+```
+
+<Warning>All messages must be dictionaries. The `action` key is used for routing to Network_* methods.</Warning>
+
+## The Pump() pattern
+
+You must call `Pump()` on both the connection and your listeners:
+
+```python
+from PodSixNet.Connection import connection
+from time import sleep
+
+client = GameClient()
+client.Connect(("localhost", 5071))
+
+# Main game loop
+while True:
+    connection.Pump()  # Process network I/O
+    client.Pump()      # Dispatch events to listeners
+    
+    # Your game logic here
+    update_game()
+    render_game()
+    
+    sleep(0.001)
+```
+
+<Steps>
+  <Step title="connection.Pump()">
+    Processes network I/O and queues incoming messages
+  </Step>
+  <Step title="client.Pump()">
+    Reads the queue and calls your Network_* callbacks
+  </Step>
+</Steps>
+
+## Multiple listeners
+
+You can have multiple `ConnectionListener` instances to separate concerns:
+
+```python
+class NetworkGUI(ConnectionListener):
+    """Updates GUI elements"""
+    def Network_players(self, data):
+        self.player_list_widget.update(data['players'])
+
+class GameLogic(ConnectionListener):
+    """Handles game state"""
+    def Network_gamestate(self, data):
+        self.update_game_state(data)
+
+# In your game loop
+gui = NetworkGUI()
+logic = GameLogic()
+
+while True:
+    connection.Pump()
+    gui.Pump()
+    logic.Pump()
+```
+
+<Tip>This pattern helps keep your code organized by domain.</Tip>
+
+## Connect() method
+
+`ConnectionListener` provides a convenience `Connect()` method:
+
+```python
+class GameClient(ConnectionListener):
+    def __init__(self):
+        # Connect and immediately check for errors
+        self.Connect(("localhost", 5071))
+
+# Internally, this calls:
+# connection.DoConnect(*args, **kwargs)
+# self.Pump()  # Check for immediate connection errors
+```
+
+## Complete example
+
+Here's a complete client implementation:
+
+```python
+from PodSixNet.Connection import ConnectionListener, connection
+from time import sleep
+
+class GameClient(ConnectionListener):
+    def __init__(self, host, port):
+        self.Connect((host, port))
+    
+    # Built-in callbacks
+    def Network_connected(self, data):
+        print("Connected to server")
+    
+    def Network_error(self, data):
+        print(f"Error: {data['error'][1]}")
+        connection.Close()
+    
+    def Network_disconnected(self, data):
+        print("Server disconnected")
+    
+    # Custom callbacks
+    def Network_welcome(self, data):
+        print(f"Server says: {data['message']}")
+    
+    def Network_players(self, data):
+        print(f"Players online: {', '.join(data['players'])}")
+    
+    # Game actions
+    def say_hello(self):
+        self.Send({"action": "hello", "name": "Player1"})
+
+# Usage
+client = GameClient("localhost", 5071)
+client.say_hello()
+
+while True:
+    connection.Pump()
+    client.Pump()
+    sleep(0.001)
+```
+
+## Advanced: Multiple connections
+
+If you need multiple connections (rare), create `EndPoint` instances directly:
+
+```python
+from PodSixNet.EndPoint import EndPoint
+
+server1 = EndPoint(("server1.com", 5071))
+server2 = EndPoint(("server2.com", 5071))
+
+server1.DoConnect()
+server2.DoConnect()
+
+while True:
+    server1.Pump()
+    server2.Pump()
+```
+
+<Note>Most games only need the singleton connection.</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Connection API" icon="plug" href="/api/connection">
+    Full Connection API reference
+  </Card>
+  <Card title="EndPoint API" icon="network-wired" href="/api/endpoint">
+    Full EndPoint API reference
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    See complete client examples
+  </Card>
+  <Card title="Server-side" icon="server" href="/concepts/server-side">
+    Learn about server implementation
+  </Card>
+</CardGroup>

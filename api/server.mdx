@@ -1,0 +1,238 @@
+---
+title: Server
+description: Server class for accepting and managing client connections
+---
+
+## Overview
+
+The `Server` class creates a network server that listens for incoming connections and manages multiple client channels. It inherits from `asyncore.dispatcher` and uses the asyncore framework for asynchronous I/O.
+
+## Class Signature
+
+```python
+class Server(asyncore.dispatcher):
+    channelClass = Channel
+```
+
+## Constructor
+
+### `__init__(channelClass, localaddr, listeners)`
+
+Creates a new server instance.
+
+<ParamField path="channelClass" type="class" default="Channel">
+  The Channel subclass to instantiate for each client connection
+</ParamField>
+
+<ParamField path="localaddr" type="tuple" default="('127.0.0.1', 5071)">
+  The (host, port) tuple to bind the server to
+</ParamField>
+
+<ParamField path="listeners" type="int" default="5">
+  The maximum number of queued connections (backlog parameter for socket.listen())
+</ParamField>
+
+```python
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class MyChannel(Channel):
+    def Network_message(self, data):
+        print(f"Client sent: {data}")
+
+server = Server(channelClass=MyChannel, localaddr=("0.0.0.0", 5071))
+```
+
+## Core Methods
+
+### `Pump()`
+
+Processes network events and sends queued messages for all channels. Call this regularly in your game loop.
+
+```python
+while True:
+    server.Pump()
+    sleep(0.01)
+```
+
+This method:
+1. Calls `Pump()` on each channel to send queued data
+2. Polls the asyncore socket map for network events
+
+### `handle_accept()`
+
+Internal asyncore callback that accepts new client connections. Creates a new channel instance for each client and calls your `Connected()` callback.
+
+You don't typically call this directly - asyncore calls it when a client connects.
+
+## Custom Callbacks
+
+### `Connected(channel, addr)`
+
+Called when a new client connects. Override this in your Server subclass.
+
+<ParamField path="channel" type="Channel" required>
+  The newly created channel instance for this client
+</ParamField>
+
+<ParamField path="addr" type="tuple" required>
+  The (host, port) tuple of the client's address
+</ParamField>
+
+```python
+class GameServer(Server):
+    def Connected(self, channel, addr):
+        print(f"New client connected from {addr}")
+        channel.player_id = len(self.channels)
+        channel.Send({"action": "welcome", "id": channel.player_id})
+```
+
+## Instance Attributes
+
+### `channelClass`
+
+The Channel subclass used to create new client connections.
+
+```python
+class MyChannel(Channel):
+    pass
+
+server = Server()
+server.channelClass = MyChannel
+```
+
+### `channels`
+
+List of all connected Channel instances.
+
+```python
+# Broadcast to all clients
+for channel in server.channels:
+    channel.Send({"action": "announcement", "text": "Server shutting down"})
+
+# Get connected player count
+print(f"Players online: {len(server.channels)}")
+```
+
+## Complete Server Example
+
+```python
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+from time import sleep
+
+class ClientChannel(Channel):
+    def Network_message(self, data):
+        # Echo message to all other clients
+        print(f"Broadcasting: {data['text']}")
+        for channel in self._server.channels:
+            if channel != self:
+                channel.Send({
+                    "action": "message",
+                    "sender": self.addr[0],
+                    "text": data['text']
+                })
+    
+    def Close(self):
+        print(f"Client {self.addr} disconnected")
+        # Notify other clients
+        for channel in self._server.channels:
+            if channel != self:
+                channel.Send({
+                    "action": "player_left",
+                    "addr": str(self.addr)
+                })
+
+class GameServer(Server):
+    channelClass = ClientChannel
+    
+    def __init__(self):
+        Server.__init__(self, localaddr=("localhost", 5071))
+        print("Server started on port 5071")
+    
+    def Connected(self, channel, addr):
+        print(f"New connection from {addr}")
+        # Notify all clients about new player
+        for c in self.channels:
+            c.Send({
+                "action": "player_joined",
+                "addr": str(addr),
+                "total": len(self.channels)
+            })
+
+# Run the server
+server = GameServer()
+
+while True:
+    server.Pump()
+    sleep(0.01)
+```
+
+## Server Setup Patterns
+
+### Basic Server
+
+```python
+from PodSixNet.Server import Server
+
+server = Server()
+
+while True:
+    server.Pump()
+    sleep(0.01)
+```
+
+### Server with Custom Channel
+
+```python
+class GameChannel(Channel):
+    def Network_move(self, data):
+        # Broadcast to all clients
+        for c in self._server.channels:
+            c.Send(data)
+
+server = Server(channelClass=GameChannel)
+```
+
+### Server Subclass Pattern
+
+```python
+class GameServer(Server):
+    def __init__(self):
+        Server.__init__(self, localaddr=("0.0.0.0", 8000))
+        self.game_state = {}
+    
+    def Connected(self, channel, addr):
+        channel.Send({"action": "init", "state": self.game_state})
+    
+    def update_game(self):
+        # Your game logic
+        pass
+
+server = GameServer()
+while True:
+    server.Pump()
+    server.update_game()
+    sleep(0.01)
+```
+
+## Managing Client Disconnections
+
+Clients are automatically removed from the `channels` list when they disconnect, but you may want to clean up game state:
+
+```python
+class PlayerChannel(Channel):
+    def __init__(self, *args, **kwargs):
+        Channel.__init__(self, *args, **kwargs)
+        self.player_name = None
+    
+    def Close(self):
+        if self.player_name:
+            print(f"Player {self.player_name} disconnected")
+            # Clean up player data
+            del self._server.players[self.player_name]
+```
+
+## Thread Safety
+
+PodSixNet is single-threaded by design. All network operations should occur in the same thread that calls `Pump()`.

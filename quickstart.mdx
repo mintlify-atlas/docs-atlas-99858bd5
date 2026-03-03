@@ -1,80 +1,305 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Build your first multiplayer game with PodSixNet in minutes - create a simple server and client
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
+This guide will get you up and running with a working client-server application in just a few minutes. We'll build a simple echo server that receives messages from clients and sends responses back.
 
-### Step 1: Set up your local environment
+## Core Concepts
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before we start coding, here are the key concepts:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Server Side" icon="server">
+    - Subclass `Server` to create your game server
+    - Subclass `Channel` to represent each connected client
+    - Call `server.Pump()` once per game loop
+  </Card>
+  
+  <Card title="Client Side" icon="user">
+    - Use the singleton `connection` object to connect
+    - Subclass `ConnectionListener` to receive events
+    - Call `connection.Pump()` and `listener.Pump()` per loop
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Building the Server
+
+Let's create a simple server that accepts connections and responds to messages.
+
+<Steps>
+  <Step title="Create a Channel class">
+    The `Channel` class represents a single connected client on the server side. Each time a client connects, a new instance is created.
+    
+    ```python server.py
+    from time import sleep
+    from PodSixNet.Server import Server
+    from PodSixNet.Channel import Channel
+    
+    class ClientChannel(Channel):
+        """
+        This is the server representation of a single connected client.
+        """
+        def Network(self, data):
+            print("Received from client:", data)
+        
+        def Network_message(self, data):
+            # This is called when action="message"
+            print("Client message:", data['message'])
+            # Send a response back to this client
+            self.Send({"action": "response", "message": "Server received: " + data['message']})
+    ```
+    
+    <Info>
+    The `Network()` method is called for all incoming data. The `Network_message()` method is only called when the data contains `{"action": "message"}`.
+    </Info>
+  </Step>
+  
+  <Step title="Create a Server class">
+    The `Server` class manages all client connections and the main server loop.
+    
+    ```python server.py
+    class MyServer(Server):
+        channelClass = ClientChannel
+        
+        def Connected(self, channel, addr):
+            print('New connection from:', addr)
+            # Optionally send a welcome message
+            channel.Send({"action": "welcome", "message": "Welcome to the server!"})
+    ```
+    
+    <Note>
+    The `channelClass` attribute tells the server which Channel class to instantiate for each new connection.
+    </Note>
+  </Step>
+  
+  <Step title="Launch the server">
+    Create a server instance and run the main loop:
+    
+    ```python server.py
+    if __name__ == '__main__':
+        # Start server on localhost:31425
+        myserver = MyServer(localaddr=('localhost', 31425))
+        print("Server started on localhost:31425")
+        
+        while True:
+            myserver.Pump()
+            sleep(0.0001)
+    ```
+    
+    <Tip>
+    The `sleep(0.0001)` prevents the loop from consuming 100% CPU while still being responsive.
+    </Tip>
+  </Step>
+</Steps>
+
+## Building the Client
+
+Now let's create a client that connects to the server and sends messages.
+
+<Steps>
+  <Step title="Create a ConnectionListener class">
+    The `ConnectionListener` class receives network events from the server.
+    
+    ```python client.py
+    from time import sleep
+    from PodSixNet.Connection import connection, ConnectionListener
+    
+    class MyClient(ConnectionListener):
+        def __init__(self, host, port):
+            self.Connect((host, port))
+            print("Client started")
+        
+        def Network_connected(self, data):
+            print("Connected to server")
+            # Send a message once connected
+            connection.Send({"action": "message", "message": "Hello from client!"})
+        
+        def Network_welcome(self, data):
+            print("Server welcome:", data['message'])
+        
+        def Network_response(self, data):
+            print("Server response:", data['message'])
+        
+        def Network_error(self, data):
+            print('Network error:', data['error'][1])
+            connection.Close()
+        
+        def Network_disconnected(self, data):
+            print('Disconnected from server')
+    ```
+    
+    <Info>
+    The built-in events `connected`, `disconnected`, and `error` are automatically sent by PodSixNet.
+    </Info>
+  </Step>
+  
+  <Step title="Connect and run the client loop">
+    Create a client instance and run the main loop:
+    
+    ```python client.py
+    if __name__ == '__main__':
+        client = MyClient('localhost', 31425)
+        
+        while True:
+            connection.Pump()
+            client.Pump()
+            sleep(0.001)
+    ```
+    
+    <Warning>
+    You must call both `connection.Pump()` and `client.Pump()` in your game loop. The connection pump handles socket I/O, while the client pump dispatches events to your Network_* methods.
+    </Warning>
+  </Step>
+</Steps>
+
+## Running Your First Server and Client
+
+<Steps>
+  <Step title="Start the server">
+    In one terminal, run:
+    
+    ```bash
+    python server.py
+    ```
+    
+    You should see:
+    ```
+    Server started on localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Start the client">
+    In another terminal, run:
+    
+    ```bash
+    python client.py
+    ```
+    
+    You should see:
+    ```
+    Client started
+    Connected to server
+    Server welcome: Welcome to the server!
+    Server response: Server received: Hello from client!
+    ```
+  </Step>
+</Steps>
+
+## Complete Working Example
+
+Here's a complete, minimal example based on the real PodSixNet source:
+
+<CodeGroup>
+```python Simple Server
+from time import sleep
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class ClientChannel(Channel):
+    def Network_message(self, data):
+        print("Message from client:", data['message'])
+        self.Send({"action": "echo", "message": data['message']})
+
+class EchoServer(Server):
+    channelClass = ClientChannel
+    
+    def Connected(self, channel, addr):
+        print('Client connected:', addr)
+
+if __name__ == '__main__':
+    server = EchoServer(localaddr=('localhost', 8000))
+    print('Echo server started on port 8000')
+    while True:
+        server.Pump()
+        sleep(0.0001)
+```
+
+```python Simple Client
+from time import sleep
+from PodSixNet.Connection import connection, ConnectionListener
+
+class EchoClient(ConnectionListener):
+    def Network_connected(self, data):
+        print("Connected!")
+        connection.Send({"action": "message", "message": "Hello World"})
+    
+    def Network_echo(self, data):
+        print("Server echoed:", data['message'])
+    
+    def Network_error(self, data):
+        print('Error:', data['error'][1])
+
+if __name__ == '__main__':
+    client = EchoClient()
+    connection.Connect(('localhost', 8000))
+    
+    while True:
+        connection.Pump()
+        client.Pump()
+        sleep(0.001)
+```
+</CodeGroup>
+
+## How the Action System Works
+
+PodSixNet uses an action-based routing system:
+
+```python
+# When you send this:
+connection.Send({"action": "jump", "height": 10, "player_id": 5})
+
+# PodSixNet looks for this method:
+def Network_jump(self, data):
+    # data = {"action": "jump", "height": 10, "player_id": 5}
+    player_id = data['player_id']
+    height = data['height']
+```
+
+<Info>
+If no `Network_<action>` method exists, the fallback `Network(data)` method is called instead (if it exists).
+</Info>
+
+## Sending Different Data Types
+
+PodSixNet can serialize Python data structures automatically:
+
+```python
+# Dictionaries
+connection.Send({"action": "update", "position": {"x": 100, "y": 200}})
+
+# Lists
+connection.Send({"action": "players", "list": ["Alice", "Bob", "Charlie"]})
+
+# Mixed types
+connection.Send({
+    "action": "gamestate",
+    "players": [{"name": "Alice", "score": 100}, {"name": "Bob", "score": 85}],
+    "time_remaining": 42.5,
+    "level": 3
+})
+```
+
+## Next Steps
+
+Now that you have a working client-server setup, explore these topics:
+
+<CardGroup cols={2}>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    See complete working examples including chat and whiteboard applications
+  </Card>
+  
+  <Card title="Server Guide" icon="server" href="/concepts/server-side">
+    Learn advanced server concepts like broadcasting and managing multiple clients
+  </Card>
+  
+  <Card title="Client Guide" icon="user" href="/concepts/client-side">
+    Deep dive into client architecture and connection management
+  </Card>
+  
+  <Card title="API Reference" icon="book" href="/api/channel">
+    Complete API documentation for all classes and methods
+  </Card>
+</CardGroup>

@@ -1,0 +1,138 @@
+---
+title: Introduction to PodSixNet
+description: Lightweight multiplayer networking library for Python games with no dependencies and simple event-driven architecture
+---
+
+# Introduction to PodSixNet
+
+PodSixNet is a lightweight network layer designed to make it easy to write multiplayer games in Python. It uses Python's built-in asyncore library and rencode.py to asynchronously serialize network events and arbitrary data structures, and deliver them to your high-level classes through simple callback methods.
+
+<Note>
+This project uses some deprecated libraries and isn't actively maintained anymore. However, it remains a solid choice for learning multiplayer game networking or building projects that need a simple, dependency-free solution.
+</Note>
+
+## Why PodSixNet?
+
+<CardGroup cols={2}>
+  <Card title="No Dependencies" icon="box">
+    Only requires Python 2.4+ (Python 3 supported). No external libraries needed - rencode.py is included.
+  </Card>
+  
+  <Card title="Event-Driven Architecture" icon="bolt">
+    Simple Network_* callback methods catch specific events. No need to wait for buffers or check sockets.
+  </Card>
+  
+  <Card title="Async by Default" icon="clock">
+    Built on Python's asyncore library for non-blocking network I/O without complex threading.
+  </Card>
+  
+  <Card title="Game-Focused Design" icon="gamepad">
+    Built specifically for multiplayer games, not generic networking. Just call Pump() once per game loop.
+  </Card>
+</CardGroup>
+
+## Quick Example
+
+Here's how simple it is to send and receive data:
+
+<CodeGroup>
+```python Server
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class ClientChannel(Channel):
+    def Network_message(self, data):
+        print("Received:", data['message'])
+        # Echo back to client
+        self.Send({"action": "response", "message": "Hello client!"})
+
+class MyServer(Server):
+    channelClass = ClientChannel
+    
+    def Connected(self, channel, addr):
+        print('New connection:', addr)
+
+myserver = MyServer()
+while True:
+    myserver.Pump()
+    sleep(0.0001)
+```
+
+```python Client
+from PodSixNet.Connection import connection, ConnectionListener
+
+class MyGame(ConnectionListener):
+    def Network_response(self, data):
+        print("Server says:", data['message'])
+    
+    def Network_connected(self, data):
+        print("Connected to server!")
+        connection.Send({"action": "message", "message": "Hello server!"})
+
+game = MyGame()
+connection.Connect()
+
+while True:
+    connection.Pump()
+    game.Pump()
+    sleep(0.001)
+```
+</CodeGroup>
+
+## Key Features
+
+### Simple Network Callbacks
+
+Each class that wants to receive network events subclasses `ConnectionListener` (client) or `Channel` (server) and implements `Network_*` methods to catch specific user-defined events.
+
+### Automatic Event Routing
+
+When you send data with an `action` key, PodSixNet automatically routes it to the corresponding `Network_<action>` method:
+
+```python
+# Client sends:
+connection.Send({"action": "jump", "height": 10})
+
+# Server receives in:
+def Network_jump(self, data):
+    player_height = data['height']  # 10
+```
+
+### Singleton Connection
+
+The client uses a singleton `connection` object, so you only need one connection to the server. Just import it and call `Pump()` once per game loop.
+
+### Flexible Serialization
+
+By default, PodSixNet uses the included rencode binary format. You can optionally switch to JSON or any serializer with `dumps` and `loads` methods, making it easy to write clients in other languages like JavaScript.
+
+## Get Started
+
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install PodSixNet via pip or from source
+  </Card>
+  
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first client-server game in minutes
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/examples/chat">
+    Explore chat, whiteboard, and lag-time examples
+  </Card>
+</CardGroup>
+
+## Why Not Twisted?
+
+Twisted is a fantastic library for writing robust network code, but it has some drawbacks for game development:
+
+- Wants to steal the mainloop
+- Is bloated and not KISS (implements many different protocols)
+- Has a weird template launching language when Python should do just fine
+- Not written 100% for the specific use-case of multiplayer games
+
+PodSixNet is lightweight, has no dependencies except Python, and is dedicated 100% to the task of multiplayer game networking.
+
+## License
+
+PodSixNet is licensed under the terms of the LGPL v3.0 or higher. This means you can use it in most types of projects (commercial or otherwise), but if you make changes to the PodSixNet code you must make the modified code available with the distribution of your software.

@@ -1,0 +1,240 @@
+---
+title: Chat Example
+description: A simple multi-user chat server demonstrating nickname handling, message broadcasting, and player list management
+---
+
+The Chat example demonstrates how to build a basic multi-user chat system with PodSixNet. This example showcases nickname handling, message broadcasting to all connected clients, and automatic player list updates.
+
+## Key Patterns Demonstrated
+
+- **ClientChannel per connection**: Each connected client gets its own `ClientChannel` instance on the server
+- **Message broadcasting**: The server relays messages from one client to all others
+- **Player tracking with WeakKeyDictionary**: Automatically removes disconnected players from the dictionary
+- **Network callbacks**: Methods prefixed with `Network_` handle specific message types
+- **ConnectionListener pattern**: Client extends `ConnectionListener` to receive network events
+
+## Running the Example
+
+<Steps>
+  <Step title="Start the server">
+    Open a terminal and run:
+    ```bash
+    python examples/ChatServer.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Start clients">
+    In separate terminals, start multiple clients:
+    ```bash
+    python examples/ChatClient.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Enter nickname">
+    Each client will prompt for a nickname. Type a name and press Enter.
+  </Step>
+  
+  <Step title="Start chatting">
+    Type messages in any client window. They'll be broadcast to all connected clients.
+  </Step>
+</Steps>
+
+## Server Code
+
+The chat server manages multiple connected clients and broadcasts messages between them.
+
+```python ChatServer.py
+from __future__ import print_function
+
+import sys
+from time import sleep, localtime
+from weakref import WeakKeyDictionary
+
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class ClientChannel(Channel):
+    """
+    This is the server representation of a single connected client.
+    """
+    def __init__(self, *args, **kwargs):
+        self.nickname = "anonymous"
+        Channel.__init__(self, *args, **kwargs)
+    
+    def Close(self):
+        self._server.DelPlayer(self)
+    
+    ##################################
+    ### Network specific callbacks ###
+    ##################################
+    
+    def Network_message(self, data):
+        self._server.SendToAll({"action": "message", "message": data['message'], "who": self.nickname})
+    
+    def Network_nickname(self, data):
+        self.nickname = data['nickname']
+        self._server.SendPlayers()
+
+class ChatServer(Server):
+    channelClass = ClientChannel
+    
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        self.players = WeakKeyDictionary()
+        print('Server launched')
+    
+    def Connected(self, channel, addr):
+        self.AddPlayer(channel)
+    
+    def AddPlayer(self, player):
+        print("New Player" + str(player.addr))
+        self.players[player] = True
+        self.SendPlayers()
+        print("players", [p for p in self.players])
+    
+    def DelPlayer(self, player):
+        print("Deleting Player" + str(player.addr))
+        del self.players[player]
+        self.SendPlayers()
+    
+    def SendPlayers(self):
+        self.SendToAll({"action": "players", "players": [p.nickname for p in self.players]})
+    
+    def SendToAll(self, data):
+        [p.Send(data) for p in self.players]
+    
+    def Launch(self):
+        while True:
+            self.Pump()
+            sleep(0.0001)
+
+# get command line argument of server, port
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        s = ChatServer(localaddr=(host, int(port)))
+        s.Launch()
+```
+
+## Client Code
+
+The chat client connects to the server, sends messages typed by the user, and displays messages from other users.
+
+```python ChatClient.py
+from __future__ import print_function
+
+import sys
+from time import sleep
+from sys import stdin, exit
+
+from PodSixNet.Connection import connection, ConnectionListener
+
+# This example uses Python threads to manage async input from sys.stdin.
+# This is so that I can receive input from the console whilst running the server.
+# Don't ever do this - it's slow and ugly. (I'm doing it for simplicity's sake)
+from _thread import *
+
+class Client(ConnectionListener):
+    def __init__(self, host, port):
+        self.Connect((host, port))
+        print("Chat client started")
+        print("Ctrl-C to exit")
+        # get a nickname from the user before starting
+        print("Enter your nickname: ")
+        connection.Send({"action": "nickname", "nickname": stdin.readline().rstrip("\n")})
+        # launch our threaded input loop
+        t = start_new_thread(self.InputLoop, ())
+    
+    def Loop(self):
+        connection.Pump()
+        self.Pump()
+    
+    def InputLoop(self):
+        # horrid threaded input loop
+        # continually reads from stdin and sends whatever is typed to the server
+        while 1:
+            connection.Send({"action": "message", "message": stdin.readline().rstrip("\n")})
+    
+    #######################################
+    ### Network event/message callbacks ###
+    #######################################
+    
+    def Network_players(self, data):
+        print("*** players: " + ", ".join([p for p in data['players']]))
+    
+    def Network_message(self, data):
+        print(data['who'] + ": " + data['message'])
+    
+    # built in stuff
+
+    def Network_connected(self, data):
+        print("You are now connected to the server")
+    
+    def Network_error(self, data):
+        print('error:', data['error'][1])
+        connection.Close()
+    
+    def Network_disconnected(self, data):
+        print('Server disconnected')
+        exit()
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        c = Client(host, int(port))
+        while 1:
+            c.Loop()
+            sleep(0.001)
+```
+
+## Key Implementation Details
+
+### WeakKeyDictionary Usage
+
+The server uses `WeakKeyDictionary` to track connected players:
+
+```python
+self.players = WeakKeyDictionary()
+```
+
+This allows the garbage collector to automatically clean up player references when channels are closed, preventing memory leaks.
+
+### Nickname Handling
+
+Clients send their nickname on connection:
+
+```python
+connection.Send({"action": "nickname", "nickname": stdin.readline().rstrip("\n")})
+```
+
+The server updates the player's nickname and broadcasts the updated player list:
+
+```python
+def Network_nickname(self, data):
+    self.nickname = data['nickname']
+    self._server.SendPlayers()
+```
+
+### Message Broadcasting
+
+When a message is received, the server sends it to all connected clients with the sender's nickname:
+
+```python
+def Network_message(self, data):
+    self._server.SendToAll({"action": "message", "message": data['message'], "who": self.nickname})
+```
+
+### Player List Management
+
+Whenever players connect, disconnect, or change their nickname, the server broadcasts an updated player list:
+
+```python
+def SendPlayers(self):
+    self.SendToAll({"action": "players", "players": [p.nickname for p in self.players]})
+```

@@ -1,0 +1,436 @@
+---
+title: Frequently asked questions
+description: Common questions about PodSixNet
+---
+
+## General questions
+
+<Accordion title="Why use PodSixNet instead of Twisted?">
+  Twisted is a fantastic library for robust network code, but it has some drawbacks for game development:
+
+  **Twisted:**
+  - Wants to "steal" the main loop (conflicts with game loops)
+  - Is bloated and complex (implements many protocols)
+  - Has a complex event system
+  - Not written specifically for multiplayer games
+
+  **PodSixNet:**
+  - Works with your existing game loop
+  - Lightweight and focused (only game networking)
+  - Simple callback pattern
+  - Zero dependencies beyond Python stdlib
+  - Designed 100% for multiplayer games
+
+  PodSixNet lets you keep control of your game loop while providing simple, reliable networking.
+</Accordion>
+
+<Accordion title="Does PodSixNet work with Python 3?">
+  Yes! PodSixNet supports both Python 2.4+ and Python 3.
+
+  The library was updated to work with Python 3 while maintaining backward compatibility with Python 2.
+
+  <Note>Python 2 is end-of-life. For new projects, use Python 3.</Note>
+</Accordion>
+
+<Accordion title="What are PodSixNet's dependencies?">
+  **None!** PodSixNet has zero external dependencies.
+
+  It only uses Python's standard library:
+  - `asyncore` - Asynchronous socket handling
+  - `socket` - Network sockets
+  - `sys` - System utilities
+
+  The `rencode` serialization library is included with PodSixNet.
+
+  This makes PodSixNet extremely easy to install and deploy.
+</Accordion>
+
+<Accordion title="Is PodSixNet still maintained?">
+  No, PodSixNet is no longer actively maintained.
+
+  From the README:
+  > *Note:* this project uses deprecated libraries ([#46](https://github.com/chr15m/PodSixNet/issues/46)) and isn't actively maintained any more.
+
+  PodSixNet uses Python's `asyncore` library, which is deprecated and will be removed in Python 3.12+.
+
+  **Options:**
+  - Continue using PodSixNet with Python 3.11 or earlier
+  - Fork and update to use modern async libraries
+  - Consider modern alternatives for new projects
+
+  PodSixNet still works perfectly fine for existing projects and learning.
+</Accordion>
+
+## Configuration
+
+<Accordion title="Can I use JSON instead of rencode?">
+  Yes! You can switch to JSON serialization for cross-language compatibility.
+
+  **Method 1: Modify Channel.py**
+
+  Edit the first line of `PodSixNet/Channel.py`:
+
+  ```python
+  # Before
+  from PodSixNet.rencode import loads, dumps
+
+  # After (Python 2.6+)
+  from json import loads, dumps
+  ```
+
+  **Method 2: Custom Channel**
+
+  Create a custom Channel class with JSON serialization (see [Data Serialization](/concepts/data-serialization)).
+
+  **Use JSON when:**
+  - Building web-based clients (JavaScript)
+  - Interfacing with non-Python systems
+  - Debugging (JSON is human-readable)
+
+  **Stick with rencode when:**
+  - Python-only ecosystem
+  - Performance matters (binary is faster)
+  - Message size matters (binary is smaller)
+</Accordion>
+
+<Accordion title="How do I change the default port?">
+  Specify the port when creating the server:
+
+  ```python
+  # Default port
+  server = MyServer()  # Uses 127.0.0.1:5071
+
+  # Custom port
+  server = MyServer(localaddr=("127.0.0.1", 8000))
+
+  # Listen on all interfaces
+  server = MyServer(localaddr=("0.0.0.0", 8000))
+  ```
+
+  Clients must connect to the same port:
+
+  ```python
+  connection.Connect(("server-address", 8000))
+  ```
+</Accordion>
+
+<Accordion title="How many concurrent connections can PodSixNet handle?">
+  This depends on:
+  - Your hardware
+  - Message frequency
+  - Message size
+  - Python version
+
+  PodSixNet has been used successfully with:
+  - **Small games:** 2-8 players (very reliable)
+  - **Medium games:** 10-50 players (works well)
+  - **Large games:** 50+ players (possible but requires optimization)
+
+  The `listeners` parameter controls the connection queue:
+
+  ```python
+  server = MyServer(
+      localaddr=("0.0.0.0", 5071),
+      listeners=10  # Max queued connections (default: 5)
+  )
+  ```
+
+  <Tip>For games with 50+ players, consider a client-server architecture with game rooms/shards.</Tip>
+</Accordion>
+
+## Connection handling
+
+<Accordion title="How do I handle client disconnections?">
+  Implement the `Close()` callback in your Channel subclass:
+
+  ```python
+  class ClientChannel(Channel):
+      def Close(self):
+          print(f"Client {self.addr} disconnected")
+          # Clean up player data
+          self._server.RemovePlayer(self)
+          # Notify other players
+          self._server.BroadcastPlayerList()
+  ```
+
+  On the client side, handle disconnection:
+
+  ```python
+  class GameClient(ConnectionListener):
+      def Network_disconnected(self, data):
+          print("Lost connection to server")
+          self.show_reconnect_dialog()
+  ```
+</Accordion>
+
+<Accordion title="Can I have multiple connections from one client?">
+  Yes, but you'll need to create multiple `EndPoint` instances instead of using the singleton:
+
+  ```python
+  from PodSixNet.EndPoint import EndPoint
+
+  # Multiple connections
+  game_server = EndPoint(("game.example.com", 5071))
+  chat_server = EndPoint(("chat.example.com", 5072))
+
+  game_server.DoConnect()
+  chat_server.DoConnect()
+
+  while True:
+      game_server.Pump()
+      chat_server.Pump()
+  ```
+
+  Most games only need the single `connection` singleton.
+</Accordion>
+
+<Accordion title="How do I implement reconnection?">
+  Implement retry logic with exponential backoff:
+
+  ```python
+  class GameClient(ConnectionListener):
+      def __init__(self):
+          self.reconnect_delay = 1.0
+          self.max_delay = 30.0
+      
+      def Network_error(self, data):
+          print(f"Connection error: {data['error'][1]}")
+          self.schedule_reconnect()
+      
+      def Network_disconnected(self, data):
+          print("Disconnected")
+          self.schedule_reconnect()
+      
+      def schedule_reconnect(self):
+          print(f"Reconnecting in {self.reconnect_delay}s...")
+          sleep(self.reconnect_delay)
+          
+          try:
+              self.Connect(("localhost", 5071))
+              self.reconnect_delay = 1.0  # Reset on success
+          except:
+              # Exponential backoff
+              self.reconnect_delay = min(
+                  self.reconnect_delay * 2,
+                  self.max_delay
+              )
+              self.schedule_reconnect()
+  ```
+</Accordion>
+
+## Architecture
+
+<Accordion title="What's the difference between Channel and ConnectionListener?">
+  **Channel:**
+  - Server-side representation of a client
+  - Handles low-level socket communication
+  - Subclassed by server to handle client messages
+  - One instance per connected client
+
+  ```python
+  class ClientChannel(Channel):
+      def Network_move(self, data):
+          # Server handling client message
+          pass
+  ```
+
+  **ConnectionListener:**
+  - Client-side class that receives server messages
+  - Multiple listeners can coexist
+  - Doesn't handle sockets directly (uses `connection` singleton)
+  - Used to separate concerns (GUI, game logic, etc.)
+
+  ```python
+  class GameClient(ConnectionListener):
+      def Network_update(self, data):
+          # Client handling server message
+          pass
+  ```
+</Accordion>
+
+<Accordion title="Can I use PodSixNet for peer-to-peer connections?">
+  Not directly. PodSixNet is designed for client-server architecture.
+
+  For peer-to-peer, you'd need:
+  - Each peer to run both a server and client
+  - Manual connection management
+  - NAT traversal (hole punching, STUN, etc.)
+
+  For true P2P, consider libraries specifically designed for it.
+
+  PodSixNet works best with dedicated servers.
+</Accordion>
+
+<Accordion title="Should I use threading with PodSixNet?">
+  Generally **no**. PodSixNet is designed to be single-threaded.
+
+  ✅ **Safe (single thread):**
+  ```python
+  while True:
+      connection.Pump()  # Main thread
+      update_game()      # Main thread
+      render()           # Main thread
+  ```
+
+  ❌ **Unsafe (multi-threaded):**
+  ```python
+  def background_thread():
+      connection.Send({...})  # Race conditions!
+  ```
+
+  If you need background tasks, use a queue:
+  ```python
+  from queue import Queue
+  
+  message_queue = Queue()
+  
+  # Background thread puts messages in queue
+  def background():
+      message_queue.put({"action": "update"})
+  
+  # Main thread sends from queue
+  while True:
+      while not message_queue.empty():
+          connection.Send(message_queue.get())
+      connection.Pump()
+  ```
+</Accordion>
+
+## Security
+
+<Accordion title="How do I secure my game server?">
+  PodSixNet doesn't provide built-in security. You'll need to implement:
+
+  **1. Authentication:**
+  ```python
+  class ClientChannel(Channel):
+      def __init__(self, *args, **kwargs):
+          self.authenticated = False
+          Channel.__init__(self, *args, **kwargs)
+      
+      def Network_login(self, data):
+          if verify_credentials(data['username'], data['password']):
+              self.authenticated = True
+              self.Send({"action": "login_success"})
+      
+      def Network_move(self, data):
+          if not self.authenticated:
+              return  # Ignore unauthenticated requests
+          # Process move...
+  ```
+
+  **2. Input validation:**
+  ```python
+  def Network_move(self, data):
+      # Validate input ranges
+      x = max(0, min(data['x'], MAX_X))
+      y = max(0, min(data['y'], MAX_Y))
+  ```
+
+  **3. Rate limiting:**
+  ```python
+  from time import time
+  
+  class ClientChannel(Channel):
+      def __init__(self, *args, **kwargs):
+          self.last_message_time = time()
+          Channel.__init__(self, *args, **kwargs)
+      
+      def Network(self, data):
+          now = time()
+          if now - self.last_message_time < 0.01:  # 100 msg/sec limit
+              return  # Rate limited
+          self.last_message_time = now
+  ```
+
+  **4. Encryption:**
+  - PodSixNet doesn't support TLS/SSL
+  - For sensitive data, use a VPN or SSH tunnel
+  - Or implement application-level encryption
+</Accordion>
+
+<Accordion title="Can clients cheat by modifying messages?">
+  Yes, clients can modify any data they send.
+
+  **Never trust client data:**
+
+  ❌ **Bad:**
+  ```python
+  def Network_move(self, data):
+      # Client says they moved 1000 units - trust it?
+      self.player.x = data['x']
+      self.player.y = data['y']
+  ```
+
+  ✅ **Good:**
+  ```python
+  def Network_move(self, data):
+      # Server validates and enforces rules
+      dx = max(-1, min(data['dx'], 1))  # Max 1 unit per move
+      dy = max(-1, min(data['dy'], 1))
+      
+      # Server calculates new position
+      new_x = self.player.x + dx
+      new_y = self.player.y + dy
+      
+      # Server validates collision, bounds, etc.
+      if self.is_valid_position(new_x, new_y):
+          self.player.x = new_x
+          self.player.y = new_y
+  ```
+
+  **Server is authoritative** - Always validate and enforce game rules on the server.
+</Accordion>
+
+## Performance
+
+<Accordion title="How can I reduce bandwidth usage?">
+  **1. Send only changes (deltas):**
+  ```python
+  # ❌ Bad - send everything
+  self.Send({"action": "state", "all_data": [...]})
+  
+  # ✅ Good - send only changes
+  self.Send({"action": "moved", "id": 5, "x": 10, "y": 20})
+  ```
+
+  **2. Use binary encoding (rencode):**
+  - Keep default rencode (don't switch to JSON)
+  - Binary is ~30-50% smaller
+
+  **3. Aggregate updates:**
+  ```python
+  # Instead of 10 messages
+  for player in players:
+      Send({"action": "pos", "id": player.id, ...})
+  
+  # Send one message
+  Send({"action": "positions", "players": [
+      {"id": p.id, "x": p.x, "y": p.y} for p in players
+  ]})
+  ```
+
+  **4. Reduce update frequency:**
+  ```python
+  # Don't send every frame - throttle updates
+  if frame_count % 3 == 0:  # Every 3rd frame
+      broadcast_positions()
+  ```
+</Accordion>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/resources/troubleshooting">
+    Fix common issues
+  </Card>
+  <Card title="Examples" icon="code" href="/examples/chat">
+    See working code
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/channel">
+    Full API documentation
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/chr15m/PodSixNet">
+    View source code
+  </Card>
+</CardGroup>

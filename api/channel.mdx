@@ -1,0 +1,181 @@
+---
+title: Channel
+description: Low-level network channel for handling bidirectional communication
+---
+
+## Overview
+
+The `Channel` class is the foundation of PodSixNet's network communication. It inherits from `asynchat.async_chat` and handles serialization, message framing, and network event callbacks.
+
+## Class Signature
+
+```python
+class Channel(asynchat.async_chat):
+    endchars = '\0---\0'
+```
+
+## Constructor
+
+### `__init__(conn, addr, server, map)`
+
+Initializes a new Channel instance.
+
+<ParamField path="conn" type="socket or None" default="None">
+  The socket connection object, or an object with a `socket` attribute
+</ParamField>
+
+<ParamField path="addr" type="tuple" default="()">
+  The address tuple (host, port) of the remote endpoint
+</ParamField>
+
+<ParamField path="server" type="Server or None" default="None">
+  Reference to the parent Server instance that created this channel
+</ParamField>
+
+<ParamField path="map" type="dict or None" default="None">
+  The asyncore socket map to use for this channel
+</ParamField>
+
+## Core Methods
+
+### `Send(data)`
+
+Serializes and queues data to be sent over the network.
+
+<ParamField path="data" type="dict" required>
+  Dictionary containing the data to send. Must be serializable by rencode.
+</ParamField>
+
+<ResponseField name="bytes_sent" type="int">
+  The number of bytes that will be sent after encoding
+</ResponseField>
+
+```python
+# Example
+channel.Send({"action": "move", "x": 100, "y": 200})
+```
+
+### `Pump()`
+
+Flushes the send queue, actually transmitting all queued messages.
+
+```python
+# Called regularly in your game loop
+channel.Pump()
+```
+
+### `collect_incoming_data(data)`
+
+Internal method that accumulates incoming raw bytes into the internal buffer.
+
+<ParamField path="data" type="bytes" required>
+  Raw bytes received from the network
+</ParamField>
+
+### `found_terminator()`
+
+Internal method called when a complete message has been received (terminated by `endchars`). Deserializes the message and routes it to the appropriate `Network_*` callback.
+
+## Connection Callbacks
+
+### `handle_connect()`
+
+Internal asyncore callback. Calls your custom `Connected()` method if defined.
+
+### `handle_error()`
+
+Internal asyncore callback. Closes the connection and calls your custom `Error()` method if defined.
+
+<ParamField path="error" type="exception">
+  The exception that occurred (passed to your `Error()` method)
+</ParamField>
+
+### `handle_close()`
+
+Internal asyncore callback. Calls your custom `Close()` method if defined, then closes the channel.
+
+## Custom Callbacks
+
+Override these methods in your Channel subclass to handle network events:
+
+### `Connected()`
+
+Called when the channel successfully connects.
+
+```python
+class MyChannel(Channel):
+    def Connected(self):
+        print(f"Connected to {self.addr}")
+```
+
+### `Error(error)`
+
+Called when a network error occurs.
+
+<ParamField path="error" type="exception" required>
+  The exception that occurred
+</ParamField>
+
+```python
+class MyChannel(Channel):
+    def Error(self, error):
+        print(f"Network error: {error}")
+```
+
+### `Close()`
+
+Called when the channel is closing.
+
+```python
+class MyChannel(Channel):
+    def Close(self):
+        print("Channel closed")
+```
+
+## Network Message Callbacks
+
+### The `Network_*` Pattern
+
+When a message arrives with an `action` field, PodSixNet automatically calls the corresponding `Network_<action>` method on your Channel subclass.
+
+```python
+class GameChannel(Channel):
+    def Network_move(self, data):
+        # Called when {"action": "move", ...} is received
+        print(f"Player moved to {data['x']}, {data['y']}")
+    
+    def Network_chat(self, data):
+        # Called when {"action": "chat", ...} is received
+        print(f"Chat message: {data['message']}")
+    
+    def Network(self, data):
+        # Called for ALL messages (in addition to specific Network_* methods)
+        print(f"Received: {data}")
+```
+
+**Message Format:**
+
+All messages must be dictionaries with an `action` key:
+
+```python
+{"action": "move", "x": 100, "y": 200}
+```
+
+This will trigger both `Network_move(data)` and `Network(data)` if they exist.
+
+## Class Variables
+
+### `endchars`
+
+The message terminator string used to delimit messages in the byte stream.
+
+```python
+Channel.endchars = '\0---\0'
+```
+
+## Instance Attributes
+
+- **`addr`** - The (host, port) tuple of the remote endpoint
+- **`sendqueue`** - List of outgoing messages waiting to be sent
+- **`_server`** - Reference to the parent Server instance
+- **`_ibuffer`** - Internal buffer for incoming data

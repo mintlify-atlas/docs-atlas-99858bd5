@@ -1,0 +1,231 @@
+---
+title: Lag Time Example
+description: Measure round-trip network latency using a ping/pong pattern to test network performance
+---
+
+The Lag Time example demonstrates how to measure network latency between client and server. This is useful for testing network performance, debugging connection issues, and understanding the real-time characteristics of your networked application.
+
+## Key Patterns Demonstrated
+
+- **Ping/Pong pattern**: Server sends pings, client echoes them back
+- **Round-trip time measurement**: Server measures time from ping sent to ping received
+- **Timestamping**: Using `time.time()` to track when messages are sent
+- **Sequential message counting**: Each ping has a count to match requests with responses
+- **Connection lifecycle**: Automatic disconnection after a set number of pings
+
+## Running the Example
+
+<Steps>
+  <Step title="Start the server">
+    Open a terminal and run:
+    ```bash
+    python examples/LagTimeServer.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Start the client">
+    In another terminal, run:
+    ```bash
+    python examples/LagTimeClient.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Watch the measurements">
+    The server will send 10 pings and display the round-trip time for each one. After 10 pings, the client automatically disconnects.
+  </Step>
+</Steps>
+
+## Example Output
+
+The server will output something like:
+
+```
+Server launched
+<LagTimeChannel connected ...> Channel connected
+<LagTimeChannel connected ...> Ping: 0
+<LagTimeChannel connected ...> ping 0 round trip time was 0.001234
+<LagTimeChannel connected ...> Ping: 1
+<LagTimeChannel connected ...> ping 1 round trip time was 0.001156
+...
+```
+
+## Server Code
+
+The lag time server sends ping messages and measures how long they take to return.
+
+```python LagTimeServer.py
+from __future__ import print_function
+
+from time import sleep, localtime
+from weakref import WeakKeyDictionary
+from time import time
+import sys
+
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class LagTimeChannel(Channel):
+    """
+    This is the server representation of a single connected client.
+    """
+    def __init__(self, *args, **kwargs):
+        Channel.__init__(self, *args, **kwargs)
+        self.count = 0
+        self.times = []
+    
+    def Close(self):
+        print(self, 'Client disconnected')
+    
+    ##################################
+    ### Network specific callbacks ###
+    ##################################
+    
+    def Network_ping(self, data):
+        print(self, "ping %d round trip time was %f" % (data["count"], time() - self.times[data["count"]]))
+        self.Ping()
+    
+    def Ping(self):
+        print(self, "Ping:", self.count)
+        self.times.append(time())
+        self.Send({"action": "ping", "count": self.count})
+        self.count += 1
+
+class LagTimeServer(Server):
+    channelClass = LagTimeChannel
+    
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        print('Server launched')
+    
+    def Connected(self, channel, addr):
+        print(channel, "Channel connected")
+        channel.Ping()
+    
+    def Launch(self):
+        while True:
+            self.Pump()
+            sleep(0.0001)
+
+# get command line argument of server, port
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        s = LagTimeServer(localaddr=(host, int(port)))
+        s.Launch()
+```
+
+## Client Code
+
+The lag time client simply echoes back each ping it receives, up to a maximum of 10 pings.
+
+```python LagTimeClient.py
+from __future__ import print_function
+
+import sys
+from time import sleep
+from sys import stdin, exit
+
+from PodSixNet.Connection import connection, ConnectionListener
+
+class LagTimeClient(ConnectionListener):
+    """ This example client connects to a LagTimeServer which then sends pings back.
+    This client responds to 10 pings, and the server measures the round-trip time of each ping and outputs it."""
+    def __init__(self, host, port):
+        self.Connect((host, port))
+        print("LagTimeClient started")
+    
+    #######################################
+    ### Network event/message callbacks ###
+    #######################################
+    
+    def Network_ping(self, data):
+        print("got:", data)
+        if data["count"] == 10:
+            connection.Close()
+        else:
+            connection.Send(data)
+    
+    # built in stuff
+    
+    def Network_connected(self, data):
+        print("Connected to the server")
+    
+    def Network_error(self, data):
+        print('error:', data['error'][1])
+        connection.Close()
+    
+    def Network_disconnected(self, data):
+        print('Server disconnected')
+        exit()
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        c = LagTimeClient(host, int(port))
+        while 1:
+            connection.Pump()
+            c.Pump()
+            sleep(0.001)
+```
+
+## Key Implementation Details
+
+### Timestamp Tracking
+
+The server maintains an array of timestamps for when each ping was sent:
+
+```python
+def Ping(self):
+    print(self, "Ping:", self.count)
+    self.times.append(time())
+    self.Send({"action": "ping", "count": self.count})
+    self.count += 1
+```
+
+### Round-Trip Time Calculation
+
+When the ping returns, the server calculates the round-trip time by subtracting the stored timestamp from the current time:
+
+```python
+def Network_ping(self, data):
+    print(self, "ping %d round trip time was %f" % (data["count"], time() - self.times[data["count"]]))
+    self.Ping()
+```
+
+### Echo Pattern
+
+The client simply sends back the same data it receives:
+
+```python
+def Network_ping(self, data):
+    print("got:", data)
+    if data["count"] == 10:
+        connection.Close()
+    else:
+        connection.Send(data)  # Echo the ping back
+```
+
+### Automatic Termination
+
+The client automatically disconnects after receiving the 10th ping:
+
+```python
+if data["count"] == 10:
+    connection.Close()
+```
+
+This prevents the ping/pong from running indefinitely.
+
+## Use Cases
+
+- **Network diagnostics**: Identify connection quality issues
+- **Performance testing**: Measure latency across different network conditions
+- **Server benchmarking**: Test how server performance affects response times
+- **Client comparison**: Compare latency between different clients or locations
+- **Development testing**: Ensure your application can handle various latency scenarios

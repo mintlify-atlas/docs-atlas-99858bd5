@@ -1,0 +1,304 @@
+---
+title: Whiteboard Example
+description: A collaborative drawing application demonstrating real-time state synchronization with pygame rendering
+---
+
+The Whiteboard example demonstrates how to build a collaborative drawing application where multiple users can draw simultaneously on a shared canvas. This example showcases real-time coordinate sharing, state synchronization, and pygame integration.
+
+## Key Patterns Demonstrated
+
+- **Real-time state synchronization**: Drawing coordinates are broadcast to all clients in real-time
+- **Initial state transfer**: New clients receive all existing drawings when they connect
+- **Per-player color assignment**: Each player gets a unique color based on their ID
+- **Line tracking**: Server maintains drawing history for state recovery
+- **Pygame integration**: Visual rendering of the collaborative whiteboard
+
+## Running the Example
+
+<Steps>
+  <Step title="Install pygame">
+    The whiteboard client requires pygame:
+    ```bash
+    pip install pygame
+    ```
+  </Step>
+  
+  <Step title="Start the server">
+    Open a terminal and run:
+    ```bash
+    python examples/WhiteboardServer.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Start clients">
+    In separate terminals, start multiple clients:
+    ```bash
+    python examples/WhiteboardClient.py localhost:31425
+    ```
+  </Step>
+  
+  <Step title="Start drawing">
+    Click and drag in any client window to draw. All connected clients will see the drawing in real-time.
+  </Step>
+</Steps>
+
+## Server Code
+
+The whiteboard server tracks all drawing actions and broadcasts them to connected clients.
+
+```python WhiteboardServer.py
+from __future__ import print_function
+
+import sys
+from time import sleep, localtime
+from random import randint
+from weakref import WeakKeyDictionary
+
+from PodSixNet.Server import Server
+from PodSixNet.Channel import Channel
+
+class ServerChannel(Channel):
+    """
+    This is the server representation of a single connected client.
+    """
+    def __init__(self, *args, **kwargs):
+        Channel.__init__(self, *args, **kwargs)
+        self.id = str(self._server.NextId())
+        intid = int(self.id)
+        self.color = [(intid + 1) % 3 * 84, (intid + 2) % 3 * 84, (intid + 3) % 3 * 84] #tuple([randint(0, 127) for r in range(3)])
+        self.lines = []
+    
+    def PassOn(self, data):
+        # pass on what we received to all connected clients
+        data.update({"id": self.id})
+        self._server.SendToAll(data)
+    
+    def Close(self):
+        self._server.DelPlayer(self)
+    
+    ##################################
+    ### Network specific callbacks ###
+    ##################################
+    
+    def Network_startline(self, data):
+        self.lines.append([data['point']])
+        self.PassOn(data)
+    
+    def Network_drawpoint(self, data):
+        self.lines[-1].append(data['point'])
+        self.PassOn(data)
+
+class WhiteboardServer(Server):
+    channelClass = ServerChannel
+    
+    def __init__(self, *args, **kwargs):
+        self.id = 0
+        Server.__init__(self, *args, **kwargs)
+        self.players = WeakKeyDictionary()
+        print('Server launched')
+    
+    def NextId(self):
+        self.id += 1
+        return self.id
+    
+    def Connected(self, channel, addr):
+        self.AddPlayer(channel)
+    
+    def AddPlayer(self, player):
+        print("New Player" + str(player.addr))
+        self.players[player] = True
+        player.Send({"action": "initial", "lines": dict([(p.id, {"color": p.color, "lines": p.lines}) for p in self.players])})
+        self.SendPlayers()
+    
+    def DelPlayer(self, player):
+        print("Deleting Player" + str(player.addr))
+        del self.players[player]
+        self.SendPlayers()
+    
+    def SendPlayers(self):
+        self.SendToAll({"action": "players", "players": dict([(p.id, p.color) for p in self.players])})
+    
+    def SendToAll(self, data):
+        [p.Send(data) for p in self.players]
+    
+    def Launch(self):
+        while True:
+            self.Pump()
+            sleep(0.0001)
+
+# get command line argument of server, port
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        s = WhiteboardServer(localaddr=(host, int(port)))
+        s.Launch()
+```
+
+## Client Code
+
+The whiteboard client handles pygame rendering and sends drawing coordinates to the server.
+
+```python WhiteboardClient.py
+from __future__ import print_function
+
+import sys
+from time import sleep
+
+from PodSixNet.Connection import connection, ConnectionListener
+from Whiteboard import Whiteboard
+
+class Client(ConnectionListener, Whiteboard):
+    def __init__(self, host, port):
+        self.Connect((host, port))
+        self.players = {}
+        Whiteboard.__init__(self)
+    
+    def Loop(self):
+        self.Pump()
+        connection.Pump()
+        self.Events()
+        self.Draw([(self.players[p]['color'], self.players[p]['lines']) for p in self.players])
+        
+        if "connecting" in self.statusLabel:
+            self.statusLabel = "connecting" + "".join(["" for s in range(int(self.frame / 30) % 4)])
+    
+    #######################    
+    ### Event callbacks ###
+    #######################
+    #def PenDraw(self, e):
+    #    connection.Send({"action": "draw", "point": e.pos})
+    
+    def PenDown(self, e):
+        connection.Send({"action": "startline", "point": e.pos})
+    
+    def PenMove(self, e):
+        connection.Send({"action": "drawpoint", "point": e.pos})
+    
+    def PenUp(self, e):
+        connection.Send({"action": "drawpoint", "point": e.pos})
+    
+    ###############################
+    ### Network event callbacks ###
+    ###############################
+    
+    def Network_initial(self, data):
+        self.players = data['lines']
+    
+    def Network_drawpoint(self, data):
+        self.players[data['id']]['lines'][-1].append(data['point'])
+    
+    def Network_startline(self, data):
+        self.players[data['id']]['lines'].append([data['point']])
+    
+    def Network_players(self, data):
+        self.playersLabel = str(len(data['players'])) + " players"
+        mark = []
+        
+        for i in data['players']:
+            if not i in self.players:
+                self.players[i] = {'color': data['players'][i], 'lines': []}
+        
+        for i in self.players:
+            if not i in data['players'].keys():
+                mark.append(i)
+        
+        for m in mark:
+            del self.players[m]
+    
+    def Network(self, data):
+        #print('network:', data)
+        pass
+    
+    def Network_connected(self, data):
+        self.statusLabel = "connected"
+    
+    def Network_error(self, data):
+        print(data)
+        import traceback
+        traceback.print_exc()
+        self.statusLabel = data['error'][1]
+        connection.Close()
+    
+    def Network_disconnected(self, data):
+        self.statusLabel += " - disconnected"
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage:", sys.argv[0], "host:port")
+        print("e.g.", sys.argv[0], "localhost:31425")
+    else:
+        host, port = sys.argv[1].split(":")
+        c = Client(host, int(port))
+        while 1:
+            c.Loop()
+            sleep(0.001)
+```
+
+## Key Implementation Details
+
+### Color Assignment
+
+Each player gets a unique color based on their ID:
+
+```python
+self.id = str(self._server.NextId())
+intid = int(self.id)
+self.color = [(intid + 1) % 3 * 84, (intid + 2) % 3 * 84, (intid + 3) % 3 * 84]
+```
+
+This ensures each player has a visually distinct color while avoiding random assignment.
+
+### Initial State Transfer
+
+When a new player connects, they receive all existing drawings:
+
+```python
+def AddPlayer(self, player):
+    print("New Player" + str(player.addr))
+    self.players[player] = True
+    player.Send({"action": "initial", "lines": dict([(p.id, {"color": p.color, "lines": p.lines}) for p in self.players])})
+    self.SendPlayers()
+```
+
+This allows new clients to see what was drawn before they joined.
+
+### Drawing Coordinate Sharing
+
+Drawing is broken into lines, where each line starts with `startline` and continues with `drawpoint` messages:
+
+```python
+def PenDown(self, e):
+    connection.Send({"action": "startline", "point": e.pos})
+
+def PenMove(self, e):
+    connection.Send({"action": "drawpoint", "point": e.pos})
+```
+
+The server stores these in the `lines` array and broadcasts them to all clients:
+
+```python
+def Network_startline(self, data):
+    self.lines.append([data['point']])
+    self.PassOn(data)
+
+def Network_drawpoint(self, data):
+    self.lines[-1].append(data['point'])
+    self.PassOn(data)
+```
+
+### Real-time Synchronization
+
+The client's main loop continuously pumps network data and redraws the canvas:
+
+```python
+def Loop(self):
+    self.Pump()
+    connection.Pump()
+    self.Events()
+    self.Draw([(self.players[p]['color'], self.players[p]['lines']) for p in self.players])
+```
+
+This creates the real-time collaborative drawing experience.

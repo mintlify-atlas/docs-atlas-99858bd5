@@ -1,0 +1,282 @@
+---
+title: EndPoint
+description: Client endpoint class that queues network events for processing
+---
+
+## Overview
+
+The `EndPoint` class is a client-side network endpoint that inherits from `Channel`. It queues all incoming network events so they can be processed by your game logic at the appropriate time.
+
+**Key Concept:** Rather than immediately processing network events as they arrive, EndPoint stores them in a queue. You retrieve and process these events by calling `GetQueue()` in your game loop.
+
+## Class Signature
+
+```python
+class EndPoint(Channel):
+    """The endpoint queues up all network events for other classes to read."""
+```
+
+## Constructor
+
+### `__init__(address, map)`
+
+Creates a new EndPoint instance (but does not connect yet).
+
+<ParamField path="address" type="tuple" default="('127.0.0.1', 31425)">
+  The default (host, port) to connect to
+</ParamField>
+
+<ParamField path="map" type="dict or None" default="None">
+  The asyncore socket map. If None, a new map is created.
+</ParamField>
+
+```python
+from PodSixNet.EndPoint import EndPoint
+
+endpoint = EndPoint(address=("localhost", 5071))
+```
+
+## Connection Methods
+
+### `DoConnect(address)`
+
+Initiates a connection to the server.
+
+<ParamField path="address" type="tuple or None" default="None">
+  The (host, port) to connect to. If None, uses the address from `__init__`.
+</ParamField>
+
+```python
+endpoint = EndPoint()
+endpoint.DoConnect(("game.example.com", 5071))
+```
+
+Connection errors are added to the queue as error messages:
+
+```python
+{"action": "error", "error": (errno, "error message")}
+```
+
+### `Close()`
+
+Closes the connection and adds a disconnect message to the queue.
+
+```python
+endpoint.Close()
+```
+
+This adds the following message to the queue:
+
+```python
+{"action": "disconnected"}
+```
+
+## Queue Methods
+
+### `GetQueue()`
+
+Returns the list of queued network events.
+
+<ResponseField name="queue" type="list[dict]">
+  List of message dictionaries that have arrived since the last call to `Pump()`
+</ResponseField>
+
+```python
+for message in endpoint.GetQueue():
+    if message['action'] == 'move':
+        player.move(message['x'], message['y'])
+    elif message['action'] == 'error':
+        print(f"Error: {message['error']}")
+```
+
+### `Pump()`
+
+Processes network I/O, sends queued messages, and clears the event queue.
+
+```python
+# In your game loop
+while running:
+    endpoint.Pump()
+    for event in endpoint.GetQueue():
+        handle_network_event(event)
+    sleep(0.01)
+```
+
+**Important:** `Pump()` clears the queue, so you must call `GetQueue()` before calling `Pump()` again.
+
+## Network Callbacks (Internal)
+
+These methods are called internally and add messages to the queue:
+
+### `Connected()`
+
+Called when the socket connects. Adds a socket connection message to the queue.
+
+```python
+{"action": "socketConnect"}
+```
+
+### `Network_connected(data)`
+
+Called when the server sends a connection confirmation. Sets `isConnected` to `True`.
+
+```python
+# Server typically sends:
+{"action": "connected"}
+```
+
+### `Network(data)`
+
+Called for all incoming messages. Adds them to the queue.
+
+<ParamField path="data" type="dict" required>
+  The incoming message dictionary
+</ParamField>
+
+### `Error(error)`
+
+Called when an error occurs. Adds an error message to the queue.
+
+<ParamField path="error" type="exception" required>
+  The error that occurred
+</ParamField>
+
+```python
+{"action": "error", "error": error}
+```
+
+## Instance Attributes
+
+### `isConnected`
+
+Boolean indicating whether the endpoint is connected to the server.
+
+```python
+if endpoint.isConnected:
+    endpoint.Send({"action": "ping"})
+else:
+    print("Not connected")
+```
+
+### `queue`
+
+List of queued network events. Access via `GetQueue()` instead of directly.
+
+### `address`
+
+The (host, port) tuple of the server.
+
+```python
+print(f"Connected to {endpoint.address[0]}:{endpoint.address[1]}")
+```
+
+## Complete Example
+
+```python
+from PodSixNet.EndPoint import EndPoint
+from time import sleep
+
+class GameClient:
+    def __init__(self, host, port):
+        self.endpoint = EndPoint()
+        self.endpoint.DoConnect((host, port))
+        self.running = True
+    
+    def handle_message(self, data):
+        action = data.get('action')
+        
+        if action == 'socketConnect':
+            print("Socket connected")
+        elif action == 'connected':
+            print("Server confirmed connection")
+            self.endpoint.Send({"action": "login", "name": "Player1"})
+        elif action == 'error':
+            print(f"Error: {data['error']}")
+            self.running = False
+        elif action == 'disconnected':
+            print("Disconnected from server")
+            self.running = False
+        elif action == 'gamestate':
+            print(f"Game state: {data['state']}")
+        else:
+            print(f"Unknown message: {data}")
+    
+    def run(self):
+        while self.running:
+            # Process network I/O
+            self.endpoint.Pump()
+            
+            # Handle all queued messages
+            for message in self.endpoint.GetQueue():
+                self.handle_message(message)
+            
+            sleep(0.01)
+
+# Usage
+client = GameClient("localhost", 5071)
+client.run()
+```
+
+## Connection Events Timeline
+
+When you connect to a server, events arrive in this order:
+
+1. **`{"action": "socketConnect"}`** - Socket connection established
+2. **`{"action": "connected"}`** - Server sends confirmation (if using PodSixNet Server)
+3. At this point, `isConnected` becomes `True`
+
+```python
+endpoint.DoConnect(("localhost", 5071))
+
+while True:
+    endpoint.Pump()
+    for msg in endpoint.GetQueue():
+        if msg['action'] == 'socketConnect':
+            print("Socket opened")
+        elif msg['action'] == 'connected':
+            print("Ready to play!")
+            # Now you can send game messages
+            endpoint.Send({"action": "join", "room": "lobby"})
+    sleep(0.01)
+```
+
+## Error Handling
+
+Connection errors are added to the queue:
+
+```python
+endpoint = EndPoint()
+endpoint.DoConnect(("invalid-host", 9999))
+
+endpoint.Pump()
+for msg in endpoint.GetQueue():
+    if msg['action'] == 'error':
+        print(f"Connection failed: {msg['error']}")
+```
+
+## Using Multiple EndPoints
+
+While the `connection` singleton is sufficient for most games, you can create multiple EndPoints:
+
+```python
+# Connect to multiple servers
+game_server = EndPoint()
+game_server.DoConnect(("game.example.com", 5071))
+
+chat_server = EndPoint()
+chat_server.DoConnect(("chat.example.com", 5072))
+
+while True:
+    game_server.Pump()
+    chat_server.Pump()
+    
+    # Process game events
+    for msg in game_server.GetQueue():
+        handle_game_event(msg)
+    
+    # Process chat events
+    for msg in chat_server.GetQueue():
+        handle_chat_event(msg)
+    
+    sleep(0.01)
+```

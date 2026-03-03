@@ -1,0 +1,157 @@
+---
+title: Installation
+description: Install PodSixNet via pip, easy_install, or from source for Python 2.4+ and Python 3
+---
+
+# Installation
+
+PodSixNet is easy to install and has no external dependencies. It works with Python 2.4 or greater, and Python 3 is also supported.
+
+## Quick Install
+
+<Steps>
+  <Step title="Install via pip (recommended)">
+    The easiest way to install PodSixNet is using pip:
+    
+    ```bash
+    pip install PodSixNet
+    ```
+  </Step>
+  
+  <Step title="Verify installation">
+    Test that PodSixNet is installed correctly:
+    
+    ```python
+    python -c "import PodSixNet; print('PodSixNet installed successfully')"
+    ```
+  </Step>
+</Steps>
+
+## Alternative: easy_install
+
+If you prefer easy_install, you can use:
+
+```bash
+easy_install PodSixNet
+```
+
+## Installing from Source
+
+For development or to use the latest version, you can install from source.
+
+<Steps>
+  <Step title="Ensure Python is installed">
+    First make sure you have Python 2.4 or greater installed (Python 3 also works):
+    
+    ```bash
+    python --version
+    ```
+  </Step>
+  
+  <Step title="Get the source code">
+    Clone or download the PodSixNet source code from GitHub:
+    
+    ```bash
+    git clone https://github.com/chr15m/PodSixNet.git
+    cd PodSixNet
+    ```
+  </Step>
+  
+  <Step title="Install the package">
+    You have three options for installation:
+    
+    <Tabs>
+      <Tab title="System install">
+        Install PodSixNet into your Python path:
+        
+        ```bash
+        sudo python setup.py install
+        ```
+      </Tab>
+      
+      <Tab title="Development mode">
+        Install in development mode to stay up to date with changes:
+        
+        ```bash
+        sudo python setup.py develop
+        ```
+        
+        This allows you to pull updates with `git pull` without reinstalling.
+      </Tab>
+      
+      <Tab title="Local copy">
+        Copy or symlink the PodSixNet subdirectory into your own project:
+        
+        ```bash
+        cp -r PodSixNet /path/to/your/project/
+        ```
+        
+        Then import it directly:
+        
+        ```python
+        import PodSixNet
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Python Version Requirements
+
+<Info>
+PodSixNet requires Python 2.4 or greater. Python 3 is fully supported.
+</Info>
+
+The library uses Python's built-in `asyncore` module, which is available in all Python versions from 2.4 onwards.
+
+## Optional: JSON Serialization
+
+By default, PodSixNet uses the included `rencode` binary format to serialize data over the network. If you want to use JSON instead (useful for writing game clients in other languages like JavaScript), you can modify the serialization settings.
+
+<Steps>
+  <Step title="Choose a JSON library">
+    You can use either:
+    - `simplejson` (for older Python versions)
+    - Built-in `json` module (Python 2.6+)
+    
+    Install simplejson if needed:
+    
+    ```bash
+    pip install simplejson
+    ```
+  </Step>
+  
+  <Step title="Modify Channel.py">
+    Change the first line of `Channel.py` from:
+    
+    ```python
+    from PodSixNet.rencode import loads, dumps
+    ```
+    
+    To one of:
+    
+    ```python
+    # For simplejson:
+    from simplejson import dumps, loads
+    
+    # For built-in json (Python 2.6+):
+    from json import dumps, loads
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Using JSON serialization allows you to write game clients in languages that can't read the 'rencode' binary format, such as JavaScript for browser-based clients.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Build your first multiplayer game in minutes
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/examples/chat">
+    Explore working examples of chat, whiteboard, and more
+  </Card>
+</CardGroup>
