@@ -1,0 +1,68 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "PodSixNet",
+  "projectDescription": "Lightweight multiplayer networking library for Python games",
+  "theme": "palm",
+  "primaryColor": "#6B46C1",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "introduction",
+          "installation",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "concepts/architecture",
+          "concepts/client-side",
+          "concepts/server-side",
+          "concepts/data-serialization"
+        ]
+      },
+      {
+        "group": "API Reference",
+        "pages": [
+          "api/channel",
+          "api/connection",
+          "api/server",
+          "api/endpoint"
+        ]
+      },
+      {
+        "group": "Examples",
+        "pages": [
+          "examples/chat",
+          "examples/whiteboard",
+          "examples/lag-time"
+        ]
+      },
+      {
+        "group": "Resources",
+        "pages": [
+          "resources/troubleshooting",
+          "resources/faq"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Event-driven network callbacks with Network_* methods",
+    "Automatic data serialization using rencode",
+    "Asynchronous networking with Python's asyncore",
+    "Simple client-server architecture for multiplayer games",
+    "No external dependencies beyond Python standard library"
+  ],
+  "publicApiSurface": [
+    "Channel",
+    "ConnectionListener",
+    "connection (singleton)",
+    "Server",
+    "EndPoint"
+  ]
+}
